@@ -32,7 +32,7 @@ labels_test = np.eye(10)[labels_test]
 print(f"labels.shape: {labels.shape}")
 print(f"Head of labels (check 1-hot encoding): {labels[:5]}")
 
-# Define elastic net loss and objective functions
+# Define Lasso loss and objective functions
 
 def loss(y, x, beta):
     """Loss function
@@ -130,7 +130,6 @@ def decode_beta(beta):
     return beta.reshape(28, 28, 10)
 
 beta_images = decode_beta(beta.value)
-# decoded_beta_image = decode_one_hot(beta_image)
 fig, ax = plt.subplots(2, 5, figsize=(10, 4))
 max_val = np.max(np.abs(beta_images))
 min_val = -max_val
