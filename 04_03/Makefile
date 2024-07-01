@@ -1,6 +1,6 @@
 .PHONY: main
 	
-title = Brunton and Kutz Problem 4.3: MNIST Classification with Multilinear Regression
+title = Brunton and Kutz Problem 4.3: Polynomial Regression with Regularization
 author = Rico A. R. Picone
 
 main: main.pdf # Default document(s) to make

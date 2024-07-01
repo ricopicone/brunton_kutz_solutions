@@ -1,12 +1,13 @@
 #%% [markdown]
-# This is the solution for Brunton and Kutz (2022), exercise 6.1, part c regarding the Lorenz equations.
+# This is the solution for Brunton and Kutz (2022), exercise 6.1, part d regarding the Lorenz equations.
 # Only the $\rho = 28$ case is considered.
 # First, import the necessary libraries:
 
 #%%
 import numpy as np
 import matplotlib.pyplot as plt
-__import__("matplotlib").use("TkAgg")
+# __import__("matplotlib").use("TkAgg")  # Use this to rotate the 3D plot
+# However, it doesn't publish well.
 from scipy import integrate
 from mpl_toolkits.mplot3d import Axes3D
 import keras

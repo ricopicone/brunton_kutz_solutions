@@ -1,6 +1,6 @@
 .PHONY: main
 	
-title = Brunton and Kutz Problem 6.1 part c: Lorenz System Prediction
+title = Brunton and Kutz Problem 6.1 part d: Lorenz System Prediction
 author = Rico A. R. Picone
 
 main: main.docx # Default document(s) to make
