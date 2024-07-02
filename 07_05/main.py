@@ -163,8 +163,6 @@ Xi = sparsifyDynamics(Theta(X), dX, threshold, 3)
 # Print the identified terms:
 
 #%%
-print(Xi.shape)
-print(Xi)
 def print_terms(Xi):
     """Print the identified terms"""
     terms = [
@@ -272,9 +270,9 @@ def fit_sindy(
 # We will use a single sample for all cases because we suspect that the number of timesteps and the number of samples have similar effects.
 
 #%%
-thresholds = np.linspace(0.01, 0.1, 11)
+thresholds = np.linspace(0.1, .5, 11)
 n_timesteps = np.flip(np.linspace(1500, 5000, 11, dtype=int))
-noise_stds = np.linspace(0, 4, 3)
+noise_stds = np.linspace(0, 8, 3)
 
 #%% [markdown]
 # Fit the SINDy model for different parameters:
@@ -336,15 +334,15 @@ for i in range(3):
     z = np.sum(np.sum(errors[:, :, i], axis=-1), axis=-1)
     ax = axes[i]
     ax.plot_surface(x, y, z, cmap='viridis')
-    ax.set_xlabel('Trajectory Length')
-    ax.set_ylabel('Sparsity Threshold')
+    ax.set_xlabel('Length')
+    ax.set_ylabel('Threshold')
     ax.set_zlabel('Error')
-    ax.set_title(f'Error for Noise Std. = {noise_stds[i]}')
+    ax.set_title(f'Noise Std = {noise_stds[i]}')
 plt.show()
 
 #%% [markdown]
-# The error increases with the noise standard deviation and sparsity threshold (at a certain point, the model will get too sparse and zero out all coefficients). 
-# Similarly, the error decreases with the trajectory length.
-# However, I don't quite understand why the error is so small for the best set of parameters (low noise, low sparsity threshold, and high trajectory length).
+# BOUNTY:
+# The error is small for low noise, low sparsity threshold, and high trajectory length.
+# I don't understand why the error is so small for the best set of parameters (low noise, low sparsity threshold, and high trajectory length).
 # If I change the best set of parameters to be something else, I get a similarly small error there, but not in the previous best set of parameters.
 # This must be a bug, but I can't find it.
