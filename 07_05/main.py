@@ -6,8 +6,6 @@
 import numpy as np
 from scipy.special import comb
 import matplotlib.pyplot as plt
-# __import__("matplotlib").use("TkAgg")  # Use this to rotate the 3D plot
-# However, it doesn't publish well.
 from scipy import integrate
 from mpl_toolkits.mplot3d import Axes3D
 
