@@ -130,7 +130,7 @@ def Theta(X):
 
 
 #%% [markdown]
-# Define the function to sparsify the dynamics using the simple algorithm:
+# Define the function to sparsify the dynamics using the STLS algorithm:
 
 #%%
 def sparsifyDynamics(Theta, dXdt, threshold, n):
@@ -256,7 +256,7 @@ def fit_sindy(
         np.arange(data.shape[0]), n_samples, replace=False
     )
     if multiple_trajectories:
-        data_to_fit = [data[random_sample_indices, :n_timesteps]]
+        data_to_fit = list(data[random_sample_indices, :n_timesteps])
     else:
         data_to_fit = data[random_sample_indices, :n_timesteps]
     model.fit(
@@ -337,7 +337,7 @@ for i in range(3):
     ax.set_xlabel('Length')
     ax.set_ylabel('Threshold')
     ax.set_zlabel('Error')
-    ax.set_title(f'Noise Std = {noise_stds[i]}')
+    ax.set_title(f'Noise Std: {noise_stds[i]}')
 plt.show()
 
 #%% [markdown]
