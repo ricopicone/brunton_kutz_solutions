@@ -259,10 +259,10 @@ error, MP, MP_dmd = eigenvector_error(eigenvectors, Phi)
 print("Eigenvector errors (percent): " + 
     f"{np.array2string(error*100, precision=2, suppress_small=True)}"
 )
-print("Original eigenvectors (noramlized):\n" +
+print("Original eigenvectors (normalized):\n" +
     f"{np.array2string(MP, precision=2, suppress_small=True)}"
 )
-print("Original eigenvectors (noramlized, reconstructed):\n" +
+print("DMD eigenvectors (normalized, reconstructed):\n" +
     f"{np.array2string(MP_dmd, precision=2, suppress_small=True)}"
 )
 
@@ -276,3 +276,36 @@ print("Sum of columns of P_dmd: " +
 
 #%% [markdown]
 # These sums are remarkably close to 1, which means that the reconstructed transition matrix is a valid Markov chain transition matrix.
+
+#%% [markdown]
+# ## Using the PyDMD Package
+#
+# The PyDMD package provides a convenient implementation of DMD. We can use it to compare the results with our implementation.
+
+#%%
+from pydmd import DMD
+dmd = DMD(svd_rank=3, exact=True)
+dmd.fit(X=X, Y=Xprime)
+
+#%% [markdown]
+# Extract the DMD modes, eigenvalues, and mode amplitudes:
+
+#%%
+Phi_pydmd = dmd.modes
+Lambda_pydmd = np.diag(dmd.eigs)
+b_pydmd = dmd.amplitudes
+
+#%% [markdown]
+# Compare the DMD modes from PyDMD with our implementation
+
+#%%
+error_pydmd, _, Phi_pydmd = eigenvector_error(eigenvectors, Phi_pydmd)
+print("PyDMD eigenvectors (normalized):\n" +
+    np.array2string(Phi_pydmd, precision=2, suppress_small=True)
+)
+print("PyDMD eigenvector errors (percent): " +
+    np.array2string(error_pydmd*100, precision=2, suppress_small=True)
+)
+
+#%% [markdown]
+# The DMD modes from PyDMD are very similar to those obtained using our implementation. The error is very low, indicating that the two sets of modes are very close.
