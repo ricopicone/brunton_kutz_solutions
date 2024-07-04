@@ -6,16 +6,12 @@
 #%%
 import numpy as np
 import matplotlib.pyplot as plt
-# __import__("matplotlib").use("TkAgg")  # Use this to rotate the 3D plot
-# However, it doesn't publish well.
 from scipy import integrate
 from mpl_toolkits.mplot3d import Axes3D
 import keras
 from keras.models import Sequential
-from keras.layers import Dense, Input
+from keras.layers import Dense, Input, Activation
 from keras import optimizers
-from keras.layers import Activation
-from keras import backend as K
 
 #%% [markdown]
 # Set script options:
@@ -42,14 +38,14 @@ def lorenz(x_, t, sigma=10, beta=8/3, rho=28):
 # Define a function to generate the training data by numerically solving the Lorenz equations for a given initial condition:
 
 #%%
-def generate_data(n_samples, n_timesteps, dt, sigma=10, beta=8/3, rho=28):
+def generate_data(n_samples, n_timesteps, dt, sigma=10, beta=8/3, rho=28, seed_offset=0):
     """
     Generate training data for the Lorenz equations
     """
     t = np.linspace(0, (n_timesteps-1)*dt, n_timesteps)  # Time array
     x = np.zeros((n_samples, n_timesteps, 3))  # Array to store the data
     for i in range(n_samples):
-        np.random.seed(i)  # For reproducibility
+        np.random.seed(i+seed_offset)  # For reproducibility
         x0 = np.random.uniform(-15, 15, 3)  # Random initial condition
         x[i] = integrate.odeint(
             lorenz,  # Dynamics to integrate
@@ -67,28 +63,38 @@ def generate_data(n_samples, n_timesteps, dt, sigma=10, beta=8/3, rho=28):
 n_samples = 100  # Number of samples
 n_t = 1000  # Number of time steps
 dt = 0.01  # Time step
+rhos_train = [10, 28, 40]  # Values of rho for training data
+n_rhos = len(rhos_train)
 if regenerate_data:
-    data = generate_data(n_samples, n_t, dt)
+    data = np.zeros((n_rhos, n_samples, n_t, 3))
+    for i, rho in enumerate(rhos_train):
+        data[i] = generate_data(n_samples, n_t, dt, rho=rho)
     np.save('training-data.npy', data)
 else:
     data = np.load('training-data.npy')
 
 #%% [markdown]
-# Plot the integrated trajectories of the Lorenz variables:
+# Plot the integrated trajectories of the Lorenz variables for rho = 28:
 
 #%%
+rhoi = 1  # Index of rho value
 fig = plt.figure()
 ax = fig.add_subplot(111, projection='3d')
 for i in range(n_samples):
-    ax.plot(data[i, :, 0], data[i, :, 1], data[i, :, 2], lw=0.5)
     ax.plot(
-        data[i, 0, 0], data[i, 0, 1], data[i, 0, 2], 
+        data[rhoi, i, :, 0],
+        data[rhoi, i, :, 1],
+        data[rhoi, i, :, 2], 
+        lw=0.5
+    )
+    ax.plot(
+        data[rhoi, i, 0, 0], data[rhoi, i, 0, 1], data[rhoi, i, 0, 2],
         lw=0.5, marker='o', color=ax.lines[-1].get_color()
     )
 ax.set_xlabel('x')
 ax.set_ylabel('y')
 ax.set_zlabel('z')
-# plt.show()
+plt.draw()
 
 #%% [markdown]
 # Transform the data into a format suitable for training a neural network.
@@ -96,11 +102,14 @@ ax.set_zlabel('z')
 # The samples are concatenated along the first axis:
 
 #%%
-X = np.zeros(((n_t-1)*n_samples, 3))
-Y = np.zeros(((n_t-1)*n_samples, 3))
-for i in range(n_samples):
-    X[i*(n_t-1):(i+1)*(n_t-1)] = data[i, :-1]
-    Y[i*(n_t-1):(i+1)*(n_t-1)] = data[i, 1:]
+X = np.zeros(((n_t-1)*n_samples*n_rhos, 3))
+Y = np.zeros(((n_t-1)*n_samples*n_rhos, 3))
+for j in range(n_rhos):
+    for i in range(n_samples):
+        X[(j*n_samples+i)*(n_t-1):(j*n_samples+i+1)*(n_t-1)] = \
+            data[j, i, :-1]
+        Y[(j*n_samples+i)*(n_t-1):(j*n_samples+i+1)*(n_t-1)] = \
+            data[j, i, 1:]
 
 #%% [markdown]
 # Define the neural network architecture:
@@ -140,7 +149,7 @@ if retrain:
     history = model.fit(
         X,  # Input data
         Y,  # Target data
-        epochs=50,  # Number of epochs
+        epochs=25,  # Number of epochs
         batch_size=32,  # Batch size
         validation_split=0.2,  # Validation split
         shuffle=True,  # Shuffle the data
@@ -163,15 +172,19 @@ if history:
     ax.set_xlabel('Epoch')
     ax.set_ylabel('Loss')
     ax.legend()
-    # plt.show()
+    plt.draw()
 
 #%% [markdown]
 # Generate new test trajectories using the trained model:
 
 #%%
 n_test_samples = 20  # Number of test samples
+rhos_test = [17, 35]  # Values of rho for test data
+n_test_rhos = len(rhos_test)
 if regenerate_data:
-    data_test = generate_data(n_samples, n_t, dt)
+    data_test = np.zeros((n_test_rhos, n_test_samples, n_t, 3))
+    for i, rho in enumerate(rhos_test):
+        data_test[i] = generate_data(n_test_samples, n_t, dt, rho=rho, seed_offset=2*n_samples*i)
     np.save('test-data.npy', data_test)
 else:
     data_test = np.load('test-data.npy')
@@ -180,11 +193,14 @@ else:
 # Transform the data into a format suitable for the neural network:
 
 #%%
-X_test = np.zeros(((n_t-1)*n_test_samples, 3))
-Y_test = np.zeros(((n_t-1)*n_test_samples, 3))
-for i in range(n_test_samples):
-    X_test[i*(n_t-1):(i+1)*(n_t-1)] = data_test[i, :-1]
-    Y_test[i*(n_t-1):(i+1)*(n_t-1)] = data_test[i, 1:]
+X_test = np.zeros(((n_t-1)*n_test_samples*n_test_rhos, 3))
+Y_test = np.zeros(((n_t-1)*n_test_samples*n_test_rhos, 3))
+for j in range(n_test_rhos):
+    for i in range(n_test_samples):
+        X_test[(j*n_test_samples+i)*(n_t-1):(j*n_test_samples+i+1)*(n_t-1)] = \
+            data_test[j, i, :-1]
+        Y_test[(j*n_test_samples+i)*(n_t-1):(j*n_test_samples+i+1)*(n_t-1)] = \
+            data_test[j, i, 1:]
 
 #%% [markdown]
 # Predict the next state using the trained model:
@@ -224,4 +240,4 @@ plt.tight_layout()
 plt.show()
 
 #%% [markdown]
-# We achieve excellent agreement between the true (numerically integrated) and predicted trajectories, even for lobe transitions.
+# We achieve excellent agreement between the true (numerically integrated) and predicted trajectories, even for lobe transitions. The test values of $\rho$ are 17 and 35, different than the training values of 10, 28, and 40. This demonstrates the ability of the neural network to generalize to new values of $\rho$.
