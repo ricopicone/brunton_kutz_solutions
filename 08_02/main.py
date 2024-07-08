@@ -44,6 +44,16 @@ def unpack_params(params):
 #%% [markdown]
 # ## Define the System Dynamics
 #
+# Deriving the system dynamics of this system is rather involved and would distract from the main purpose of this exercise.
+# We will use the system dynamics provided in the paper _On the Dynamics of the Furuta Pendulum_ by Cazzolato and Prime.
+# 
+# The nonlinear system dynamics are given by equations (33) and (34).
+# See figure 1 in the paper for the system diagram.
+# We will assume that the center of mass of each arm is at the geometric center of the arm.
+# Let the state vector be
+# $$
+# x = \begin{bmatrix} \theta_1 \\ \theta_2 \\ \dot{\theta}_1 \\ \dot{\theta}_2 \end{bmatrix},
+# $$
 # Define the nonlinear system dynamics:
 
 #%%
@@ -121,23 +131,28 @@ def rotary_inverted_pendulum(t, x, ufun, params):
 
 #%% [markdown]
 # Define the linearized system dynamics.
-# Start with the A and B matrices:
+# The paper provides the linearized system dynamics in equations (35) and (36) for the unstable upright equilibrium point
+# $$
+# x_e = \begin{bmatrix} 0 \\ \pi \\ 0 \\ 0 \end{bmatrix}.
+# $$
+# It includes torque inputs $\tau_1$ and $\tau_2$, but we will only consider $\tau_1$ in accordance with the problem statement.
+# This equilibrium point can be derived by setting the nonlinear system dynamics to zero and solving for the state variables.
 
 #%%
-def get_AB(params):
+def get_AB(params, tau1only=True, upright=True):
     """Linearized rotary inverted pendulum system dynamics
     
     From https://doi.org/10.1155/2011/528341, equations (35) and (36).
     State vector x = [theta1, theta2, theta1_dot, theta2_dot].
-    Operating point is at the upright equilibrium: x = [0, pi, 0, 0].
-    Input vector u = [tau1, tau2].
+    Operating point is at the upright equilibrium (default) x = [0, pi, 0, 0]
+    or the unstable equilibrium x = [0, 0, 0, 0] if upright=False.
+    Input vector u = [tau1, tau2] or [tau1] if tau1only=True.
     """
     # Unpack parameters
     m1, m2, l1, l2, L1, L2, J0h, J2h, b1, b2, g = unpack_params(params)
 
     # Linearized system dynamics
     den = J0h*J2h - m2**2*L1**2*l2**2
-    print(den)
     A31 = 0
     A32 = g * m2**2 * l2**2 * L1 / den
     A33 = -b1 * J2h / den
@@ -150,21 +165,57 @@ def get_AB(params):
     B41 = m2 * L1 * l2 / den
     B32 = m2 * L1 * l2 / den
     B42 = J0h / den
-    A = np.array([
-        [0, 0, 1, 0],
-        [0, 0, 0, 1],
-        [A31, A32, A33, A34],
-        [A41, A42, A43, A44]
-    ])
-    B = np.array([
-        [0, 0],
-        [0, 0],
-        [B31, B32],
-        [B41, B42]
-    ])
+    if upright:
+        sign = 1
+    else:
+        sign = -1
+    if tau1only:  # Single input
+        A = np.array([
+            [0, 0, 1, 0],
+            [0, 0, 0, 1],
+            [A31, A32, A33, sign*A34],
+            [A41, sign*A42, sign*A43, A44]
+        ])
+        B = np.array([
+            [0],
+            [0],
+            [B31],
+            [sign*B41]
+        ])
+    else:
+        A = np.array([
+            [0, 0, 1, 0],
+            [0, 0, 0, 1],
+            [A31, A32, A33, sign*A34],
+            [A41, sign*A42, sign*A43, A44]
+        ])
+        B = np.array([
+            [0, 0],
+            [0, 0],
+            [B31, sign*B32],
+            [sign*B41, B42]
+        ])
     return A, B
 
 #%% [markdown]
+# ## Controllability
+#
+# Check the controllability of the linearized system.
+# The system is controllable if the controllability matrix has full rank.
+# The controllability matrix is given by
+
+#%%
+A, B = get_AB(params, tau1only=True)
+Ctrb = control.ctrb(A, B)
+rank_Ctrb = np.linalg.matrix_rank(Ctrb)
+full_rank = rank_Ctrb == A.shape[0]
+print(f'Controllability matrix rank: {rank_Ctrb}')
+print(f'Full rank: {full_rank}')
+
+#%% [markdown]
+# Since the controllability matrix has full rank, the system is controllable.
+# It would be more controllable if both torque inputs $\tau_1$ and $\tau_2$ were used, but it is remarkable that the system is controllable with only one input.
+#
 # ## Full-State Feedback LQR Control
 # 
 # Define the LQR controller using the control library.
@@ -173,21 +224,20 @@ def get_AB(params):
 #%%
 Q = np.diag([
     1,  # theta1 error cost
-    1,  # theta2 error cost
+    100,  # theta2 error cost
     1,  # theta1 rate error cost
-    1,  # theta2 rate error cost
+    10,  # theta2 rate error cost
 ])  # State error cost matrix
 R = np.diag([
     1,  # tau1 cost
-    10000,  # tau2 cost
 ])  # Control effort cost matrix
 
 # [markdown]
 # Next, compute the LQR gain matrix:
 
 #%%
-A, B = get_AB(params=params)
-sys_lin = control.ss(A, B, np.eye(4), np.zeros((4, 2)))
+A, B = get_AB(params=params, tau1only=True)
+sys_lin = control.ss(A, B, np.eye(4), np.zeros((A.shape[0], B.shape[1])))
 K, S, E = control.lqr(sys_lin, Q, R)
 
 #% [markdown]
@@ -230,9 +280,14 @@ def simulate_nonlinear_system(x0, t_sim, x_command, params, ufun):
 t_sim = np.linspace(0, 10, 1000)  # Simulation time
 x0 = np.array([-40, 199, 0, 0]) * np.pi/180  # Initial state
 u0 = np.array([0, 0])  # Initial control input
-x_command = np.array([np.pi/3, np.pi, 0, 0])  # Command state
-def ufun(t, x):  # Control input function
-    return lqr_control(x, x_command, K)
+x_command = np.array([np.pi/3, np.pi, 0, 0])  # Command state (static)
+def ufun(t, x, tau1only=True):  # Control input function
+    u =  lqr_control(x, x_command, K)
+    if tau1only:
+        tau2 = np.zeros_like(u)  # Zero out tau2
+        return np.hstack((u, tau2))
+    else:
+        return u
 
 #%% [markdown]
 # Simulate the response:
@@ -270,7 +325,7 @@ plt.draw()
 from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Rectangle
 
-def animate_rotary_pendulum(t, x, params):
+def animate_rotary_pendulum(t, x, params, track_theta2=False):
     """Animate the rotary inverted pendulum response"""
 
     # Unpack parameters
@@ -284,8 +339,15 @@ def animate_rotary_pendulum(t, x, params):
     ax.axis('off')
 
     # Initialize the plot elements
+    rod0, = ax.plot([], [], 'k--', lw=1)
     rod1, = ax.plot([], [], 'r', lw=2)
     rod2, = ax.plot([], [], 'b', lw=2)
+    text_theta1 = ax.annotate(
+        text=r'$\theta_1 = 0$', 
+        xy=(0, -L1/2), xycoords='data', 
+        xytext=(20, -20), textcoords='offset pixels', 
+        ha='center', va='center'
+    )
 
     # Update function for the animation
     def update(i):
@@ -293,13 +355,32 @@ def animate_rotary_pendulum(t, x, params):
         theta2 = x[1, i]
         x0 = 0
         y0 = 0
-        x1 = L1 * np.sin(theta1)
-        y1 = -1
-        x2 = x1 + L2 * np.sin(theta2)
-        y2 = y1 - L2 * np.cos(theta2)
-        rod1.set_data([x0, x1], [y0, y1])
-        rod2.set_data([x1, x2], [y1, y2])
-        return rod1, rod2
+        if track_theta2:
+            x_theta1 = -L1 * np.sin(theta1)
+            y_theta1 = -L1/2 * np.cos(theta1)
+            y0d = -L1/2
+            x1 = L1 * np.sin(theta1)
+            y1 = -L1/2 * np.cos(theta1)
+            x2 = x1 + L2 * np.sin(theta2) - x1
+            y2 = -L2 * np.cos(theta2) + y0d
+            rod0.set_data([x0, -x1], [y0, y1])
+            rod1.set_data([x0, x0], [y0, y0d])
+            rod2.set_data([x0, x2], [y0d, y2])
+            text_theta1.xy = (x_theta1, y_theta1)
+            text_theta1.set_position((-45*np.sin(theta1), -45*np.cos(theta1)))
+            return rod0, rod1, rod2, text_theta1
+        else:
+            y_theta1 = -L1/2
+            x1 = L1 * np.sin(theta1)
+            y1 = -L1/2 * np.cos(theta1)
+            x2 = x1 + L2 * np.sin(theta2)
+            y2 = y1 - L2 * np.cos(theta2)
+            rod0.set_data([x0, x0], [y0, y_theta1])
+            rod1.set_data([x0, x1], [y0, y1])
+            rod2.set_data([x1, x2], [y1, y2])
+            text_theta1.xy = (x0, y_theta1)
+            text_theta1.set_position((0, -20))
+            return rod0, rod1, rod2, text_theta1
 
     # Create the animation
     anim = FuncAnimation(fig, update, frames=range(len(t)), blit=True, interval=6)
@@ -310,5 +391,120 @@ def animate_rotary_pendulum(t, x, params):
 # Animate the response:
 
 #%%
-anim = animate_rotary_pendulum(t_sim, x_sim.y, params)
+anim = animate_rotary_pendulum(t_sim, x_sim.y, params, track_theta2=False)
+plt.draw()
+
+#%% [markdown]
+# Now plot the control inputs over time along with the angular position states:
+
+#%%
+u_sim = np.array([ufun(t, x) for t, x in zip(t_sim, x_sim.y.T)])
+print(u_sim.shape)
+fig, ax = plt.subplots(2, 1, figsize=(6, 6), sharex=True)
+ax[0].plot(t_sim, x_sim.y[0], label=r'$\theta_1$')
+ax[0].plot(t_sim, x_sim.y[1], label=r'$\theta_2$')
+ax[0].plot(t_sim, x_command[0] * np.ones_like(t_sim), 'k--', label=r'$\theta_1$ command')
+ax[0].plot(t_sim, x_command[1] * np.ones_like(t_sim), 'k:', label=r'$\theta_2$ command')
+ax[0].set_ylabel('Angle (rad)')
+ax[0].legend()
+ax[1].plot(t_sim, u_sim[:,0], label=r'$\tau_1$')
+ax[1].set_ylabel(r'Control Input $\tau_1$ (N*m)')
+ax[1].set_xlabel('Time (s)')
 plt.show()
+
+#%% [markdown]
+# ## Observability
+#
+# Explore the observability of the system.
+# We define three different sensor configurations:
+# 1. Observe $\theta_1$ and $\theta_2$
+# 2. Observe $\dot{\theta}_1$ and $\dot{\theta}_2$
+# 3. Observe $\theta_1$ and $\dot{\theta}_1$
+#
+# Define the output equation $C$ matrix for each sensor configuration:
+
+#%%
+def get_C(params, sensor_config):
+    """C matrix for the rotary inverted pendulum system
+    
+    Define the C matrix for different sensor configurations.
+    """
+    if sensor_config == 1:
+        C = np.array([
+            [1, 0, 0, 0],
+            [0, 1, 0, 0]
+        ])
+    elif sensor_config == 2:
+        C = np.array([
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]
+        ])
+    elif sensor_config == 3:
+        C = np.array([
+            [1, 0, 0, 0],
+            [0, 0, 1, 0]
+        ])
+    return C
+
+#%% [markdown]
+# Define the observability matrix for each sensor configuration:
+
+#%%
+sensor_configs = [1, 2, 3]
+for sensor_config in sensor_configs:
+    C = get_C(params, sensor_config)
+    Obsv = control.obsv(A, C)
+    rank_Obsv = np.linalg.matrix_rank(Obsv)
+    full_rank = rank_Obsv == A.shape[0]
+    print(f'Sensor Configuration {sensor_config}')
+    print(f'\tObservability matrix rank: {rank_Obsv}')
+    print(f'\tFull rank: {full_rank}')
+
+#%% [markdown]
+# So the system is observable for sensor configurations 1 and 3 only, but not for 2.
+# Therefore, configuration 2 is not as observable as the other two configurations.
+#
+# Now explore which of sensor configurations 1 and 3 is more observable.
+# We can compute the observability Gramian for each configuration and compare the eigenvalues.
+# The control library function `control.gram()` can compute the observability Gramian.
+# However, it can only do so for stable systems.
+# The stable equilibrium point $x_e = [0, 0, 0, 0]$ is only marginally stable, so we can't use it, either.
+# Let's try nudging the eigenvalues of the A matrix to the left, slightly, to make it stable.
+
+#%%
+sensor_configs = [1, 2, 3]
+As, Bs = get_AB(params, tau1only=True, upright=False)
+print(f'Eigenvalues of A matrix: {np.linalg.eigvals(As)}')
+As = As - 0.0001 * np.eye(4)  # Nudge the eigenvalues to the left
+print(f'Eigenvalues of nudged A matrix: {np.linalg.eigvals(As)}')
+for sensor_config in sensor_configs:
+    C = get_C(params, sensor_config)
+    sys_lin_down = control.ss(As, Bs, C, np.zeros((C.shape[0], B.shape[1])))
+    W = control.gram(sys_lin_down, 'o')
+    print(f'Sensor Configuration {sensor_config} (Downward Equilibrium)')
+    print(f'\tObservability Gramian Eigenvalues: {np.linalg.eigvals(W)}')
+    print(f'\tObservability Gramian Determinant: {np.linalg.det(W):.3e}')
+
+#%% [markdown]
+# We see that the observability Gramian for sensor configuration 3 has a higher determinant than for configuration 1.
+# Therefore, sensor configuration 3 is more observable than configuration 1.
+# However, both configurations are observable.
+# We also observe that the observability Gramian for configuration 2 is singular, which is why the system is not observable for that configuration.
+#
+# As a practical matter, it is easier to measure angular position than angular velocity.
+# Therefore, we will go forward with sensor configuration 1 (observe $\theta_1$ and $\theta_2) for the observer design.
+#
+# ## Full-State Observer Design
+#
+# Define the observer gain matrix using the control library:
+
+#%%
+C = get_C(params, sensor_config=1)
+Vd = np.array([
+    [1, 0],  # theta1 disturbance covariance
+    [0, 1]  # theta2 disturbance covariance
+])  # Disturbance covariance matrix
+Vn = np.array([
+    [1, 0],  # theta1 noise covariance
+    [0, 1]  # theta2 noise covariance
+])  # Noise covariance matrix
