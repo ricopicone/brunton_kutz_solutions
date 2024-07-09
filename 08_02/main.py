@@ -169,13 +169,13 @@ def get_AB(params, tau1only=True, upright=True):
         sign = 1
     else:
         sign = -1
+    A = np.array([
+        [0, 0, 1, 0],
+        [0, 0, 0, 1],
+        [A31, A32, A33, sign*A34],
+        [A41, sign*A42, sign*A43, A44]
+    ])
     if tau1only:  # Single input
-        A = np.array([
-            [0, 0, 1, 0],
-            [0, 0, 0, 1],
-            [A31, A32, A33, sign*A34],
-            [A41, sign*A42, sign*A43, A44]
-        ])
         B = np.array([
             [0],
             [0],
@@ -183,12 +183,6 @@ def get_AB(params, tau1only=True, upright=True):
             [sign*B41]
         ])
     else:
-        A = np.array([
-            [0, 0, 1, 0],
-            [0, 0, 0, 1],
-            [A31, A32, A33, sign*A34],
-            [A41, sign*A42, sign*A43, A44]
-        ])
         B = np.array([
             [0, 0],
             [0, 0],
@@ -232,24 +226,24 @@ R = np.diag([
     1,  # tau1 cost
 ])  # Control effort cost matrix
 
-# [markdown]
+#%% [markdown]
 # Next, compute the LQR gain matrix:
 
 #%%
 A, B = get_AB(params=params, tau1only=True)
 sys_lin = control.ss(A, B, np.eye(4), np.zeros((A.shape[0], B.shape[1])))
-K, S, E = control.lqr(sys_lin, Q, R)
+Kr, S, E = control.lqr(sys_lin, Q, R)
 
-#% [markdown]
+#%% [markdown]
 # Define the control law function:
 
 #%%
-def lqr_control(x, x_command, K):
+def lqr_control(x, x_command, Kr):
     """LQR full-state feedback control law
     
     Incorporate the command state x_command to compute the control input.
     """
-    u = -K @ (x - x_command)
+    u = -Kr @ (x - x_command)
     return u
 
 #%% [markdown]
@@ -259,7 +253,7 @@ def lqr_control(x, x_command, K):
 # Define the simulation function using scipy for integration:
 
 #%%
-def simulate_nonlinear_system(x0, t_sim, x_command, params, ufun):
+def simulate_nonlinear_system(x0, t_sim, params, ufun):
     """Simulate the nonlinear rotary inverted pendulum system
     
     Use the scipy `solve_ivp` function to simulate the system dynamics.
@@ -280,9 +274,9 @@ def simulate_nonlinear_system(x0, t_sim, x_command, params, ufun):
 t_sim = np.linspace(0, 10, 1000)  # Simulation time
 x0 = np.array([-40, 199, 0, 0]) * np.pi/180  # Initial state
 u0 = np.array([0, 0])  # Initial control input
-x_command = np.array([np.pi/3, np.pi, 0, 0])  # Command state (static)
 def ufun(t, x, tau1only=True):  # Control input function
-    u =  lqr_control(x, x_command, K)
+    ufun.x_command = np.array([np.pi/3, np.pi, 0, 0])  # Command state (static)
+    u =  lqr_control(x, ufun.x_command, Kr)
     if tau1only:
         tau2 = np.zeros_like(u)  # Zero out tau2
         return np.hstack((u, tau2))
@@ -293,7 +287,7 @@ def ufun(t, x, tau1only=True):  # Control input function
 # Simulate the response:
 
 #%%
-x_sim = simulate_nonlinear_system(x0, t_sim, x_command, params, ufun)
+x_sim = simulate_nonlinear_system(x0, t_sim, params, ufun)
 
 #%% [markdown]
 # ## Plot the Closed-Loop Response
@@ -304,14 +298,14 @@ x_sim = simulate_nonlinear_system(x0, t_sim, x_command, params, ufun)
 fig, ax = plt.subplots(2, 1, figsize=(6, 6), sharex=True)
 ax[0].plot(t_sim, x_sim.y[0], label=r'$\theta_1$')
 ax[0].plot(t_sim, x_sim.y[1], label=r'$\theta_2$')
-ax[0].plot(t_sim, x_command[0] * np.ones_like(t_sim), 'k--', label=r'$\theta_1$ command')
-ax[0].plot(t_sim, x_command[1] * np.ones_like(t_sim), 'k:', label=r'$\theta_2$ command')
+ax[0].plot(t_sim, ufun.x_command[0] * np.ones_like(t_sim), 'k--', label=r'$\theta_1$ command')
+ax[0].plot(t_sim, ufun.x_command[1] * np.ones_like(t_sim), 'k:', label=r'$\theta_2$ command')
 ax[0].set_ylabel('Angle (rad)')
 ax[0].legend()
 ax[1].plot(t_sim, x_sim.y[2], label=r'$\dot{\theta}_1$')
 ax[1].plot(t_sim, x_sim.y[3], label=r'$\dot{\theta}_2$')
-ax[1].plot(t_sim, x_command[2] * np.ones_like(t_sim), 'k--', label=r'$\dot{\theta}_1$ command')
-ax[1].plot(t_sim, x_command[3] * np.ones_like(t_sim), 'k:', label=r'$\dot{\theta}_2$ command')
+ax[1].plot(t_sim, ufun.x_command[2] * np.ones_like(t_sim), 'k--', label=r'$\dot{\theta}_1$ command')
+ax[1].plot(t_sim, ufun.x_command[3] * np.ones_like(t_sim), 'k:', label=r'$\dot{\theta}_2$ command')
 ax[1].set_ylabel('Angular Rate (rad/s)')
 ax[1].set_xlabel('Time (s)')
 plt.draw()
@@ -339,12 +333,19 @@ def animate_rotary_pendulum(t, x, params, track_theta2=False):
     ax.axis('off')
 
     # Initialize the plot elements
-    rod0, = ax.plot([], [], 'k--', lw=1)
+    rod01, = ax.plot([], [], 'k--', lw=1)
+    rod02, = ax.plot([], [], 'k--', lw=1)
     rod1, = ax.plot([], [], 'r', lw=2)
     rod2, = ax.plot([], [], 'b', lw=2)
     text_theta1 = ax.annotate(
         text=r'$\theta_1 = 0$', 
         xy=(0, -L1/2), xycoords='data', 
+        xytext=(20, -20), textcoords='offset pixels', 
+        ha='center', va='center'
+    )
+    text_theta2 = ax.annotate(
+        text=r'$\theta_2 = 0$', 
+        xy=(0, -L2/2), xycoords='data', 
         xytext=(20, -20), textcoords='offset pixels', 
         ha='center', va='center'
     )
@@ -363,24 +364,30 @@ def animate_rotary_pendulum(t, x, params, track_theta2=False):
             y1 = -L1/2 * np.cos(theta1)
             x2 = x1 + L2 * np.sin(theta2) - x1
             y2 = -L2 * np.cos(theta2) + y0d
-            rod0.set_data([x0, -x1], [y0, y1])
+            rod01.set_data([x0, -x1], [y0, y1])
+            rod02.set_data([x0, x0], [y0d, y0d+L2])
             rod1.set_data([x0, x0], [y0, y0d])
             rod2.set_data([x0, x2], [y0d, y2])
             text_theta1.xy = (x_theta1, y_theta1)
             text_theta1.set_position((-45*np.sin(theta1), -45*np.cos(theta1)))
-            return rod0, rod1, rod2, text_theta1
+            text_theta2.xy = (x0, y0d+L2)
+            text_theta2.set_position((x0, y0+L2+20))
+            return rod01, rod02, rod1, rod2, text_theta1, text_theta2
         else:
             y_theta1 = -L1/2
             x1 = L1 * np.sin(theta1)
             y1 = -L1/2 * np.cos(theta1)
             x2 = x1 + L2 * np.sin(theta2)
             y2 = y1 - L2 * np.cos(theta2)
-            rod0.set_data([x0, x0], [y0, y_theta1])
+            rod01.set_data([x0, x0], [y0, y_theta1])
+            rod02.set_data([x1, x1], [y1, y2])
             rod1.set_data([x0, x1], [y0, y1])
             rod2.set_data([x1, x2], [y1, y2])
             text_theta1.xy = (x0, y_theta1)
             text_theta1.set_position((0, -20))
-            return rod0, rod1, rod2, text_theta1
+            text_theta2.xy = (x1, y2)
+            text_theta2.set_position((x1, y2+20))
+            return rod01, rod02, rod1, rod2, text_theta1, text_theta2
 
     # Create the animation
     anim = FuncAnimation(fig, update, frames=range(len(t)), blit=True, interval=6)
@@ -403,14 +410,14 @@ print(u_sim.shape)
 fig, ax = plt.subplots(2, 1, figsize=(6, 6), sharex=True)
 ax[0].plot(t_sim, x_sim.y[0], label=r'$\theta_1$')
 ax[0].plot(t_sim, x_sim.y[1], label=r'$\theta_2$')
-ax[0].plot(t_sim, x_command[0] * np.ones_like(t_sim), 'k--', label=r'$\theta_1$ command')
-ax[0].plot(t_sim, x_command[1] * np.ones_like(t_sim), 'k:', label=r'$\theta_2$ command')
+ax[0].plot(t_sim, ufun.x_command[0] * np.ones_like(t_sim), 'k--', label=r'$\theta_1$ command')
+ax[0].plot(t_sim, ufun.x_command[1] * np.ones_like(t_sim), 'k:', label=r'$\theta_2$ command')
 ax[0].set_ylabel('Angle (rad)')
 ax[0].legend()
 ax[1].plot(t_sim, u_sim[:,0], label=r'$\tau_1$')
 ax[1].set_ylabel(r'Control Input $\tau_1$ (N*m)')
 ax[1].set_xlabel('Time (s)')
-plt.show()
+plt.draw()
 
 #%% [markdown]
 # ## Observability
@@ -431,18 +438,18 @@ def get_C(params, sensor_config):
     """
     if sensor_config == 1:
         C = np.array([
-            [1, 0, 0, 0],
-            [0, 1, 0, 0]
+            [1, 0, 0, 0],  # theta1
+            [0, 1, 0, 0]  # theta2
         ])
     elif sensor_config == 2:
         C = np.array([
-            [0, 0, 1, 0],
-            [0, 0, 0, 1]
+            [1, 0, 0, 0],  # theta1
+            [0, 0, 0, 1]  # theta2_dot
         ])
     elif sensor_config == 3:
         C = np.array([
-            [1, 0, 0, 0],
-            [0, 0, 1, 0]
+            [0, 0, 1, 0],  # theta1_dot
+            [0, 0, 0, 1]  # theta2_dot
         ])
     return C
 
@@ -461,18 +468,16 @@ for sensor_config in sensor_configs:
     print(f'\tFull rank: {full_rank}')
 
 #%% [markdown]
-# So the system is observable for sensor configurations 1 and 3 only, but not for 2.
-# Therefore, configuration 2 is not as observable as the other two configurations.
-#
-# Now explore which of sensor configurations 1 and 3 is more observable.
-# We can compute the observability Gramian for each configuration and compare the eigenvalues.
+# So the system is observable for sensor configurations 1 and 2 only, but not for 3.
+# Now explore which of sensor configurations 1 and 2 is more observable.
+# We can compute the observability Gramian for each configuration and compare its eigenvalues.
 # The control library function `control.gram()` can compute the observability Gramian.
 # However, it can only do so for stable systems.
-# The stable equilibrium point $x_e = [0, 0, 0, 0]$ is only marginally stable, so we can't use it, either.
-# Let's try nudging the eigenvalues of the A matrix to the left, slightly, to make it stable.
+# This is clearly out for the unstable equilibrium.
+# The downward equilibrium point $x_e = [0, 0, 0, 0]$ is only marginally stable, so we can't use it, either.
+# Let's try nudging the eigenvalues of the downward A matrix to the left, slightly, to make it stable.
 
 #%%
-sensor_configs = [1, 2, 3]
 As, Bs = get_AB(params, tau1only=True, upright=False)
 print(f'Eigenvalues of A matrix: {np.linalg.eigvals(As)}')
 As = As - 0.0001 * np.eye(4)  # Nudge the eigenvalues to the left
@@ -486,25 +491,204 @@ for sensor_config in sensor_configs:
     print(f'\tObservability Gramian Determinant: {np.linalg.det(W):.3e}')
 
 #%% [markdown]
-# We see that the observability Gramian for sensor configuration 3 has a higher determinant than for configuration 1.
-# Therefore, sensor configuration 3 is more observable than configuration 1.
+# We see that the observability Gramian for sensor configuration 2 has a higher determinant than for configuration 1.
+# Therefore, sensor configuration 2 is more observable than configuration 1.
 # However, both configurations are observable.
-# We also observe that the observability Gramian for configuration 2 is singular, which is why the system is not observable for that configuration.
+# We also observe that the observability Gramian for configuration 3 is singular, which is another way of determining that it is not observable for that configuration.
 #
 # As a practical matter, it is easier to measure angular position than angular velocity.
 # Therefore, we will go forward with sensor configuration 1 (observe $\theta_1$ and $\theta_2) for the observer design.
 #
 # ## Full-State Observer Design
 #
-# Define the observer gain matrix using the control library:
+# Define the observer gain matrix using the control library.
+# Larger values in the observer weighting matrices $V_d$ and $V_n$ will make the observer more sensitive to disturbances (i.e., process noise) and measurement noise, respectively.
+# The linear state equation assumed for the observer design is
+# \begin{align*}
+# \dot{x} &= A x + B u + G w_d \\
+# y &= C x + D u + w_n
+# \end{align*}
+# where $w_d$ is the disturbance input, $G$ is the disturbance input matrix, and $w_n$ is the measurement noise.
+# The observer dynamics are given by
+# \begin{align*}
+# \dot{\hat{x}} &= A \hat{x} + B u + K_f (y - C \hat{x} - D u) \\
+# &= (A - K_f C) \hat{x} + (B - K_f D) u + K_f y \\
+# &= (A - K_f C) \hat{x} + \begin{bmatrix} K_f & (B - K_f D) \end{bmatrix} \begin{bmatrix} y \\ u \end{bmatrix},
+# \end{align*}
+# where $\hat{x}$ is the state estimate and $K_f$ is the observer gain matrix.
+# The observer gain matrix $K_f$ can be computed using the control library function `control.lqe()` as follows:
 
 #%%
+n_states = A.shape[0]  # Number of states
+n_inputs = B.shape[1]  # Number of control inputs
+n_outputs = C.shape[0]  # Number of outputs
+n_disturbances = 4  # Number of disturbance inputs
+n_noises = 2  # Number of measurement noise inputs
 C = get_C(params, sensor_config=1)
-Vd = np.array([
-    [1, 0],  # theta1 disturbance covariance
-    [0, 1]  # theta2 disturbance covariance
-])  # Disturbance covariance matrix
-Vn = np.array([
-    [1, 0],  # theta1 noise covariance
-    [0, 1]  # theta2 noise covariance
-])  # Noise covariance matrix
+Vd = 1e-5 * np.diag(np.ones((n_disturbances,)))  # Disturbance covar
+Vn = 1e-4 * np.diag(np.ones((n_noises,)))  # Measurement noise covar
+G = np.eye(A.shape[0])  # Disturbance input matrix
+Kf, P, E = control.lqe(A, G, C, Vd, Vn)
+
+#%% [markdown]
+# ## LQG Control
+#
+# Define the LQG controller function.
+# The LQG controller combines the LQR controller with the LQE observer.
+# The control input is computed as
+# $$
+# u = -K_f \hat{x}.
+# $$
+# The observer dynamics have already been defined, above.
+# The LQG controller, then, is a dynamic system with input $u$, internal state $\hat{x}$, and output $u$.
+#
+# When the plant is linear, the closed-loop system can be represented as a single state-space system.
+# In our case, the plant is nonlinear, so we will need to model the LQG controller as a separate system, which will be used to compute the control input $u$ at each time step.
+# Perhaps the easiest way to do this is to use the control library to create a state-space system for the plant and the LQG controller, then connect them with the `control.interconnect()` function.
+# Begin with defining the LQG controller, which has state $\hat{x}$.
+# The input is normally the noisy output of the plant $y$, but we will augment it with the command 4-vector $r$, which specifies the desired states.
+
+#%%
+A, B = get_AB(params, tau1only=True)
+C = get_C(params, sensor_config=1)
+print(f'Kr shape: {Kr.shape}')
+print(f'B shape: {B.shape}')
+Ac = A - Kf @ C - B @ Kr  # LQG controller A matrix
+Bc = np.hstack([
+    Kf,  # Actual LQG controller D matrix
+    np.zeros_like(B @ Kr)  # Augmented for the command "input"
+])  # LQG controller B matrix
+Kr_copy = Kr.copy()
+Kr = np.vstack(
+    [Kr, np.zeros_like(Kr)],
+)  # Augment Kr to zero out tau2
+Cc = -Kr  # LQG controller C matrix
+Dc = np.hstack([
+    np.zeros((2, n_outputs)),  # Actual LQG controller D matrix
+    Kr  # Augmented for the command "input"
+])  # LQG controller D matrix augmented for the command "input"
+print(f'Ac shape: {Ac.shape}, Bc shape: {Bc.shape}, Cc shape: {Cc.shape}, Dc shape: {Dc.shape}')
+sysc = control.ss(
+    Ac, Bc, Cc, Dc,
+    inputs=['theta1_dn', 'theta2_dn', 'theta1_command', 'theta2_command',
+        'theta1_dot_command', 'theta2_dot_command'],
+    outputs=['tau1', 'tau2'],
+    states=['theta1_hat', 'theta2_hat', 
+        'theta1_dot_hat', 'theta2_dot_hat'],
+    name='sysc'
+)  # LQG controller system
+
+#%% [markdown]
+# Now create a `control.InputOutputSystem` object for the nonlinear plant.
+# Before we can do that, we need to define a plant function that can incorporate disturbances.
+# Consider the following:
+
+#%%
+def rotary_inverted_pendulum_disturbed(t, x, v, params):
+    """Rotary inverted pendulum system dynamics with disturbances
+    
+    Input vector v = [tau1, tau2, w_d1, w_d2, w_d3, w_d4, w_n1, w_n2].
+    State vector x = [theta1, theta2, theta1_dot, theta2_dot].
+    """
+
+    n_inputs = 2  # Number of control inputs (tau1, tau2)
+    n_disturbances = 4  # Number of disturbance inputs
+    # Get the undisturbed state derivatives
+    def vfun(t, x):
+        return v[:n_inputs]
+    dx_dt = rotary_inverted_pendulum(t, x, vfun, params)
+
+    # Add the disturbance terms
+    G = np.eye(x.shape[0])  # Disturbance input matrix
+        # Each disturbance input affects the corresponding state
+    dx_dt += G @ v[n_inputs:n_inputs+n_disturbances]
+
+    return dx_dt
+
+
+#%% [markdown]
+# Additionally, we need a corresponding output function to incorporate measurement noise.
+# Consider the following:
+
+#%%
+def output_function_noised(t, x, v, params):
+    """Output function for the rotary inverted pendulum system
+    
+    Output function for the rotary inverted pendulum system with measurement noise.
+    """
+    n_noises = 2  # Number of measurement noise inputs
+    y = np.array([x[0], x[1]])  # Output is [theta1_dn, theta2_dn]
+    y += v[-n_noises:]  # Add the measurement noise
+    return y
+
+#%% [markdown]
+# Now create the `control.InputOutputSystem` object for the nonlinear plant:
+
+#%%
+sys_plant = control.NonlinearIOSystem(
+    rotary_inverted_pendulum_disturbed,
+    outfcn=output_function_noised,
+    inputs=['tau1', 'tau2', 'w_d1', 'w_d2', 'w_d3', 'w_d4', 'w_n1', 'w_n2'],
+    states=['theta1', 'theta2', 'theta1_dot', 'theta2_dot'],
+    outputs=['theta1_dn', 'theta2_dn'],
+    name='sys_plant',
+    params=params
+)
+
+#%% [markdown]
+# Now we can connect the LQG controller to the nonlinear plant using the `control.interconnect()` function as follows:
+
+#%%
+sys_cl = control.interconnect(
+    syslist=[sys_plant, sysc],
+    # connections=[],  # Internal connections are connected by name
+    inputs=[
+        'theta1_command', 'theta2_command',  # Command inputs
+        'theta1_dot_command', 'theta2_dot_command', 
+        'w_d1', 'w_d2', 'w_d3', 'w_d4',  # Disturbance inputs
+        'w_n1', 'w_n2'  # Measurement noise inputs
+    ],  # External inputs
+    # inplist=[],  # External inputs are connected by name
+    outputs=['theta1_dn', 'theta2_dn'],
+    # outlist=[]  # External outputs are connected by name
+)
+
+#%% [markdown]
+# ## Simulation with LQG Control
+#
+# Define the simulation function for the LQG-controlled system using the `control.forced_response()` function:
+
+#%%
+t_sim = np.linspace(0, 6, 1000)  # Simulation time
+x0 = np.array([1, 0, 0, 0]) * np.pi/180  # Initial state
+command_inputs = [
+    0*np.ones_like(t_sim),  # theta1 command
+    np.zeros_like(t_sim),  # theta2 command
+    np.zeros_like(t_sim),  # theta1_dot command
+    np.zeros_like(t_sim)  # theta2_dot command
+]  # Command inputs
+disturbance_inputs = [
+    np.zeros((4, len(t_sim)))
+]  # Disturbances
+noise_inputs = [
+    np.zeros((2, len(t_sim)))  # Measurement noise
+]  # Measurement noise
+t, y = control.forced_response(
+    sys_cl,
+    T=t_sim,
+    U=command_inputs+disturbance_inputs+noise_inputs,
+    X0=x0
+)
+
+#%% [markdown]
+# Plot the response of the system states and control inputs:
+
+#%%
+fig, ax = plt.subplots()
+ax.plot(t, y[0], label=r'$\theta_1$')
+ax.plot(t, y[1], label=r'$\theta_2$')
+ax.plot(t, command_inputs[0], 'k--', label=r'$\theta_1$ command')
+ax.plot(t, command_inputs[1], 'k:', label=r'$\theta_2$ command')
+ax.set_ylabel('Angle (rad)')
+ax.legend()
+plt.show()
