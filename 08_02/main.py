@@ -220,7 +220,7 @@ Q = np.diag([
     1,  # theta1 error cost
     10,  # theta2 error cost
     1,  # theta1 rate error cost
-    1,  # theta2 rate error cost
+    2,  # theta2 rate error cost
 ])  # State error cost matrix
 R = np.diag([
     1,  # tau1 cost
@@ -552,26 +552,27 @@ Kf, P, E = control.lqe(A, G, C, Vd, Vn)
 # The input is normally the noisy output of the plant $y$, but we will augment it with the command 4-vector $r$, which specifies the desired states.
 
 #%%
-n_in_aug = n_outputs + n_states  # Number of augmented inputs
-print(f"n_in_aug: {n_in_aug}")
-print(f"Kf: {Kf.shape}, C: {C.shape}")
-Ac = A - Kf @ C - (B - Kf @ D) @ Kr  # LQG controller A matrix
+Ac = A - Kf @ C  # LQG controller A matrix
 Bc = np.hstack([
     Kf,  # Actual LQG controller B matrix
+    B - Kf @ D,  # Augmented for control effort input
+    np.zeros((n_states, 1)),  # Augmented to zero out tau2
     np.zeros((n_states, 4))  # Augment for the command "input"
 ])  # LQG controller B matrix augmented
 Cc = np.vstack([
     -Kr,  # Actual LQG controller C matrix
-    np.zeros_like(Kr),  # Augmented to zero out tau2
+    np.zeros((1, n_states)),  # Augmented to zero out tau2
 ])  # LQG controller C matrix augmented
+print(f"Ac: {Ac.shape}, Bc: {Bc.shape}, Cc: {Cc.shape}")
 Dc = np.hstack([
     np.zeros((2, n_outputs)),  # Actual LQG controller D matrix
+    np.zeros((2, 2)),  # Augmented for control effort input
     -Cc,  # Augmented for the command "input"
 ])  # LQG controller D matrix augmented
-print(f"Ac: {Ac.shape}, Bc: {Bc.shape}, Cc: {Cc.shape}, Dc: {Dc.shape}")
 sysc = control.ss(
     Ac, Bc, Cc, Dc,
     inputs=['theta1_dn', 'theta2_dn', 
+        'tau1', 'tau2',
         'theta1_command', 'theta2_command',
         'theta1_dot_command', 'theta2_dot_command'],
     outputs=['tau1', 'tau2'],
@@ -661,7 +662,7 @@ sys_cl = control.interconnect(
 # Define the simulation function for the LQG-controlled system using the `control.forced_response()` function:
 
 #%%
-t_sim = np.linspace(0, .1, 1000)  # Simulation time
+t_sim = np.linspace(0, 1, 1000)  # Simulation time
 x0 = np.array([0, np.pi, 0, 0])  # Initial state (use for observer too)
 command_inputs = np.vstack([
     0.1*np.ones_like(t_sim),  # theta1 command
