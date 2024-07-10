@@ -218,9 +218,9 @@ print(f'Full rank: {full_rank}')
 #%%
 Q = np.diag([
     1,  # theta1 error cost
-    100,  # theta2 error cost
+    10,  # theta2 error cost
     1,  # theta1 rate error cost
-    10,  # theta2 rate error cost
+    1,  # theta2 rate error cost
 ])  # State error cost matrix
 R = np.diag([
     1,  # tau1 cost
@@ -519,6 +519,7 @@ for sensor_config in sensor_configs:
 
 #%%
 A, B = get_AB(params, tau1only=True)
+print(f"Eigenvalues of A matrix: {np.linalg.eigvals(A)}")
 C = get_C(params, sensor_config=1)
 n_states = A.shape[0]  # Number of states
 n_inputs = B.shape[1]  # Number of control inputs
@@ -526,8 +527,10 @@ n_outputs = C.shape[0]  # Number of outputs
 D = np.zeros((n_outputs, n_inputs))
 n_disturbances = 4  # Number of disturbance inputs
 n_noises = 2  # Number of measurement noise inputs
-Vd = 1e-2 * np.diag(np.ones((n_disturbances,)))  # Disturbance covar
-Vn = 1e-1 * np.diag(np.ones((n_noises,)))  # Measurement noise covar
+stdd = 1e-3
+stdn = 1e-2
+Vd = stdd * np.diag(np.ones((n_disturbances,)))  # Disturbance covar
+Vn = np.sqrt(stdn) * np.diag(np.ones((n_noises,)))  # Measurement noise covar
 G = np.eye(A.shape[0])  # Disturbance input matrix
 Kf, P, E = control.lqe(A, G, C, Vd, Vn)
 
@@ -590,9 +593,9 @@ def rotary_inverted_pendulum_disturbed(t, x, v, params):
     n_inputs = 2  # Number of control inputs (tau1, tau2)
     n_disturbances = 4  # Number of disturbance inputs
     # Get the undisturbed state derivatives
-    def vfun(t, x):
+    def ufun(t, x):
         return v[:n_inputs]
-    dx_dt = rotary_inverted_pendulum(t, x, vfun, params)
+    dx_dt = rotary_inverted_pendulum(t, x, ufun, params)
 
     # Add the disturbance terms
     G = np.eye(x.shape[0])  # Disturbance input matrix
@@ -657,22 +660,22 @@ sys_cl = control.interconnect(
 #%%
 t_sim = np.linspace(0, 1, 1000)  # Simulation time
 x0 = np.array([0, np.pi, 0, 0])  # Initial state (use for observer too)
-command_inputs = [
+command_inputs = np.vstack([
     0.1*np.ones_like(t_sim),  # theta1 command
     np.pi*np.ones_like(t_sim),  # theta2 command
     np.zeros_like(t_sim),  # theta1_dot command
     np.zeros_like(t_sim)  # theta2_dot command
-]  # Command inputs
-disturbance_inputs = [
-    1e-4*np.random.randn(4, len(t_sim)),
-]  # Disturbances
-noise_inputs = [
-    1e-4*np.random.randn(2, len(t_sim)),
-]  # Measurement noise
+])  # Command inputs
+disturbance_inputs = stdd*np.random.randn(4, len(t_sim))  # Disturbances
+noise_inputs = stdn*np.random.randn(2, len(t_sim))  # Measurement noise
+all_inputs = np.vstack([
+    command_inputs, disturbance_inputs, noise_inputs
+])  # All inputs
+print(all_inputs.shape)
 lqr_response = control.forced_response(
     sys_cl,
     T=t_sim,
-    U=command_inputs+disturbance_inputs+noise_inputs,
+    U=all_inputs,
     X0=np.concatenate([x0,x0])
 )
 y = lqr_response.outputs
