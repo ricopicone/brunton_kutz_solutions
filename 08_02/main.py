@@ -552,22 +552,29 @@ Kf, P, E = control.lqe(A, G, C, Vd, Vn)
 # The input is normally the noisy output of the plant $y$, but we will augment it with the command 4-vector $r$, which specifies the desired states.
 
 #%%
-Ac = A - Kf @ C - (B - Kf @ D) @ Kr  # LQG controller A matrix
+Ac = A - Kf @ C  # LQG controller A matrix
 Bc = np.hstack([
     Kf,  # Actual LQG controller B matrix
+    B - Kf @ D,  # Augmented for control effort input
+    np.zeros((n_states, 1)),  # Augmented to zero out tau2
     np.zeros((n_states, 4))  # Augment for the command "input"
 ])  # LQG controller B matrix augmented
-Kr = np.vstack(
-    [Kr, np.zeros_like(Kr)],
-)  # Augment Kr to zero out tau2
-Cc = -Kr  # LQG controller C matrix
+Cc = np.vstack([
+    -Kr,  # Actual LQG controller C matrix
+    np.zeros((1, n_states)),  # Augmented for command "input"
+])  # LQG controller C matrix augmented
+print(f"Ac: {Ac.shape}, Bc: {Bc.shape}, Cc: {Cc.shape}")
 Dc = np.hstack([
     np.zeros((2, n_outputs)),  # Actual LQG controller D matrix
-    Kr  # Augmented for the command "input"
-])  # LQG controller D matrix augmented for the command "input"
+    np.zeros((2, n_inputs)),  # Augmented for control effort input
+    -Cc,  # Augmented for the command "input"
+    np.zeros((2, 1))  # Augmented to zero out tau2
+])  # LQG controller D matrix augmented
+print(f"Ac: {Ac.shape}, Bc: {Bc.shape}, Cc: {Cc.shape}, Dc: {Dc.shape}")
 sysc = control.ss(
     Ac, Bc, Cc, Dc,
     inputs=['theta1_dn', 'theta2_dn', 
+        'tau1', 'tau2',
         'theta1_command', 'theta2_command',
         'theta1_dot_command', 'theta2_dot_command'],
     outputs=['tau1', 'tau2'],
