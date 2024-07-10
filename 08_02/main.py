@@ -532,6 +532,16 @@ Vd = stdd**2 * np.diag(np.ones((n_disturbances,)))  # Disturbance covar
 Vn = stdn**2 * np.diag(np.ones((n_noises,)))  # Measurement noise covar
 G = np.eye(A.shape[0])  # Disturbance input matrix
 Kf, P, E = control.lqe(A, G, C, Vd, Vn)
+sys_lin = control.ss(A, B, C, D)
+estim = control.create_estimator_iosystem(
+    sys_lin, Vd, Vn, G=G,
+    inputs=['theta1_dn', 'theta2_dn', 
+        'tau1', 'tau2', 'w_d1', 'w_d2', 'w_d3', 'w_d4', 'w_n1', 'w_n2'],
+    outputs=['theta1_hat', 'theta2_hat', 'theta1_dot_hat', 'theta2_dot_hat'],
+    name='estim'
+)
+print(f'Observer Gain Matrix: {Kf}')
+print(estim)
 
 #%% [markdown]
 # ## LQG Control
@@ -552,33 +562,7 @@ Kf, P, E = control.lqe(A, G, C, Vd, Vn)
 # The input is normally the noisy output of the plant $y$, but we will augment it with the command 4-vector $r$, which specifies the desired states.
 
 #%%
-n_in_aug = n_outputs + n_states  # Number of augmented inputs
-print(f"n_in_aug: {n_in_aug}")
-print(f"Kf: {Kf.shape}, C: {C.shape}")
-Ac = A - Kf @ C - (B - Kf @ D) @ Kr  # LQG controller A matrix
-Bc = np.hstack([
-    Kf,  # Actual LQG controller B matrix
-    np.zeros((n_states, 4))  # Augment for the command "input"
-])  # LQG controller B matrix augmented
-Cc = np.vstack([
-    -Kr,  # Actual LQG controller C matrix
-    np.zeros_like(Kr),  # Augmented to zero out tau2
-])  # LQG controller C matrix augmented
-Dc = np.hstack([
-    np.zeros((2, n_outputs)),  # Actual LQG controller D matrix
-    -Cc,  # Augmented for the command "input"
-])  # LQG controller D matrix augmented
-print(f"Ac: {Ac.shape}, Bc: {Bc.shape}, Cc: {Cc.shape}, Dc: {Dc.shape}")
-sysc = control.ss(
-    Ac, Bc, Cc, Dc,
-    inputs=['theta1_dn', 'theta2_dn', 
-        'theta1_command', 'theta2_command',
-        'theta1_dot_command', 'theta2_dot_command'],
-    outputs=['tau1', 'tau2'],
-    states=['theta1_hat', 'theta2_hat', 
-        'theta1_dot_hat', 'theta2_dot_hat'],
-    name='sysc'
-)  # LQG controller system
+
 
 #%% [markdown]
 # Now create a `control.InputOutputSystem` object for the nonlinear plant.
@@ -636,6 +620,27 @@ sys_plant = control.NonlinearIOSystem(
     name='sys_plant',
     params=params
 )
+
+# Kr_stack = np.vstack([Kr, np.zeros((7, Kr.shape[1]))])
+Kr_stack = np.vstack([Kr, np.zeros((1, Kr.shape[1]))])
+
+print(f"Kr: {Kr}\nKr shape: {Kr.shape}")
+
+ctrl, clsys = control.create_statefbk_iosystem(
+    sys_plant, Kr_stack, estimator=estim,
+    inputs=[
+        'theta1_command', 'theta2_command',  # Command inputs
+        'theta1_dot_command', 'theta2_dot_command', 
+        'w_d1', 'w_d2', 'w_d3', 'w_d4',  # Disturbance inputs
+        'w_n1', 'w_n2'  # Measurement noise inputs
+    ],  # External inputs
+    # outputs=['theta1_dn', 'theta2_dn', 'tau1', 'tau2'],
+    name='clsys'
+)
+
+print(clsys)
+
+exit(0)
 
 #%% [markdown]
 # Now we can connect the LQG controller to the nonlinear plant using the `control.interconnect()` function as follows:
