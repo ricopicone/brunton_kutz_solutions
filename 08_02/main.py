@@ -519,7 +519,6 @@ for sensor_config in sensor_configs:
 
 #%%
 A, B = get_AB(params, tau1only=True)
-print(f"Eigenvalues of A matrix: {np.linalg.eigvals(A)}")
 C = get_C(params, sensor_config=1)
 n_states = A.shape[0]  # Number of states
 n_inputs = B.shape[1]  # Number of control inputs
@@ -527,10 +526,10 @@ n_outputs = C.shape[0]  # Number of outputs
 D = np.zeros((n_outputs, n_inputs))
 n_disturbances = 4  # Number of disturbance inputs
 n_noises = 2  # Number of measurement noise inputs
-stdd = 1e-3
-stdn = 1e-2
-Vd = stdd * np.diag(np.ones((n_disturbances,)))  # Disturbance covar
-Vn = np.sqrt(stdn) * np.diag(np.ones((n_noises,)))  # Measurement noise covar
+stdd = 1e-3  # Standard deviation of disturbances
+stdn = 1e-2  # Standard deviation of measurement noise
+Vd = stdd**2 * np.diag(np.ones((n_disturbances,)))  # Disturbance covar
+Vn = stdn**2 * np.diag(np.ones((n_noises,)))  # Measurement noise covar
 G = np.eye(A.shape[0])  # Disturbance input matrix
 Kf, P, E = control.lqe(A, G, C, Vd, Vn)
 
