@@ -571,7 +571,7 @@ Dc = np.hstack([
 print(f"Ac: {Ac.shape}, Bc: {Bc.shape}, Cc: {Cc.shape}, Dc: {Dc.shape}")
 sysc = control.ss(
     Ac, Bc, Cc, Dc,
-    inputs=['theta1_dn', 'theta2_dn', 
+    inputs=['theta1_dne', 'theta2_dne', 
         'theta1_command', 'theta2_command',
         'theta1_dot_command', 'theta2_dot_command'],
     outputs=['tau1', 'tau2'],
@@ -638,21 +638,36 @@ sys_plant = control.NonlinearIOSystem(
 )
 
 #%% [markdown]
+# The LQG controller system has states relative to the equilibrium.
+# Therefore, we must subtract out the equilibrium states from the plant states before connecting the systems.
+# We can do this by summing an additional input to the closed-loop system that specifies the equilibrium state, then subtracting it out with a summing junction into the LQG controller.
+
+#%%
+sum1 = control.summing_junction(
+    inputs=['theta1_dn', '-theta1_e'],
+    output='theta1_dne'
+)
+sum2 = control.summing_junction(
+    inputs=['theta2_dn', '-theta2_e'],
+    output='theta2_dne'
+)
+
 # Now we can connect the LQG controller to the nonlinear plant using the `control.interconnect()` function as follows:
 
 #%%
 sys_cl = control.interconnect(
-    syslist=[sys_plant, sysc],
+    syslist=[sys_plant, sysc, sum1, sum2],
     # connections=[],  # Internal connections are connected by name
     inputs=[
         'theta1_command', 'theta2_command',  # Command inputs
         'theta1_dot_command', 'theta2_dot_command', 
         'w_d1', 'w_d2', 'w_d3', 'w_d4',  # Disturbance inputs
-        'w_n1', 'w_n2'  # Measurement noise inputs
+        'w_n1', 'w_n2',  # Measurement noise inputs
+        'theta1_e', 'theta2_e'  # Equilibrium states
     ],  # External inputs
-    # inplist=[],  # External inputs are connected by name
     outputs=['theta1_dn', 'theta2_dn', 'tau1', 'tau2'],
     # outlist=[]  # External outputs are connected by name
+    name='sys_cl'
 )
 
 #%% [markdown]
@@ -661,27 +676,31 @@ sys_cl = control.interconnect(
 # Define the simulation function for the LQG-controlled system using the `control.forced_response()` function:
 
 #%%
-t_sim = np.linspace(0, .1, 1000)  # Simulation time
-x0 = np.array([0, np.pi, 0, 0])  # Initial state (use for observer too)
+t_sim = np.linspace(0, 6, 1000)  # Simulation time
+x0 = np.array([0, np.pi, 0, 0])  # Initial state
+x0_hat = np.array([0, 0, 0, 0])  # Initial observer state
 command_inputs = np.vstack([
     0.1*np.ones_like(t_sim),  # theta1 command
-    np.pi*np.ones_like(t_sim),  # theta2 command
+    np.zeros_like(t_sim),  # theta2 command
     np.zeros_like(t_sim),  # theta1_dot command
     np.zeros_like(t_sim)  # theta2_dot command
-])  # Command inputs
-# disturbance_inputs = stdd*np.random.randn(4, len(t_sim))  # Disturbances
-# noise_inputs = stdn*np.random.randn(2, len(t_sim))  # Measurement noise
-disturbance_inputs = 0*np.random.randn(4, len(t_sim))  # Disturbances
-noise_inputs = 0*np.random.randn(2, len(t_sim))  # Measurement noise
+])  # Command inputs in observer coordinates (x - x_equliibrium)
+disturbance_inputs = stdd*np.random.randn(4, len(t_sim))  # Disturbances
+noise_inputs = stdn*np.random.randn(2, len(t_sim))  # Measurement noise
+# disturbance_inputs = 0*np.random.randn(4, len(t_sim))  # Disturbances
+# noise_inputs = 0*np.random.randn(2, len(t_sim))  # Measurement noise
+equilibrium_positions = np.vstack([
+    np.zeros_like(t_sim),
+    np.pi*np.ones_like(t_sim),
+])  # Equilibrium states
 all_inputs = np.vstack([
-    command_inputs, disturbance_inputs, noise_inputs
+    command_inputs, disturbance_inputs, noise_inputs, equilibrium_positions
 ])  # All inputs
-print(all_inputs.shape)
 lqr_response = control.forced_response(
     sys_cl,
     T=t_sim,
     U=all_inputs,
-    X0=np.concatenate([x0,x0])
+    X0=np.concatenate([x0,x0_hat])
 )
 y = lqr_response.outputs
 x = lqr_response.states
