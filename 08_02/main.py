@@ -406,7 +406,6 @@ plt.draw()
 
 #%%
 u_sim = np.array([ufun(t, x) for t, x in zip(t_sim, x_sim.y.T)])
-print(u_sim.shape)
 fig, ax = plt.subplots(2, 1, figsize=(6, 6), sharex=True)
 ax[0].plot(t_sim, x_sim.y[0], label=r'$\theta_1$')
 ax[0].plot(t_sim, x_sim.y[1], label=r'$\theta_2$')
@@ -519,14 +518,16 @@ for sensor_config in sensor_configs:
 # The observer gain matrix $K_f$ can be computed using the control library function `control.lqe()` as follows:
 
 #%%
+A, B = get_AB(params, tau1only=True)
+C = get_C(params, sensor_config=1)
 n_states = A.shape[0]  # Number of states
 n_inputs = B.shape[1]  # Number of control inputs
 n_outputs = C.shape[0]  # Number of outputs
+D = np.zeros((n_outputs, n_inputs))
 n_disturbances = 4  # Number of disturbance inputs
 n_noises = 2  # Number of measurement noise inputs
-C = get_C(params, sensor_config=1)
-Vd = 1e-5 * np.diag(np.ones((n_disturbances,)))  # Disturbance covar
-Vn = 1e-4 * np.diag(np.ones((n_noises,)))  # Measurement noise covar
+Vd = 1e-2 * np.diag(np.ones((n_disturbances,)))  # Disturbance covar
+Vn = 1e-1 * np.diag(np.ones((n_noises,)))  # Measurement noise covar
 G = np.eye(A.shape[0])  # Disturbance input matrix
 Kf, P, E = control.lqe(A, G, C, Vd, Vn)
 
@@ -549,16 +550,11 @@ Kf, P, E = control.lqe(A, G, C, Vd, Vn)
 # The input is normally the noisy output of the plant $y$, but we will augment it with the command 4-vector $r$, which specifies the desired states.
 
 #%%
-A, B = get_AB(params, tau1only=True)
-C = get_C(params, sensor_config=1)
-print(f'Kr shape: {Kr.shape}')
-print(f'B shape: {B.shape}')
-Ac = A - Kf @ C - B @ Kr  # LQG controller A matrix
+Ac = A - Kf @ C - (B - Kf @ D) @ Kr  # LQG controller A matrix
 Bc = np.hstack([
-    Kf,  # Actual LQG controller D matrix
-    np.zeros_like(B @ Kr)  # Augmented for the command "input"
-])  # LQG controller B matrix
-Kr_copy = Kr.copy()
+    Kf,  # Actual LQG controller B matrix
+    np.zeros((n_states, 4))  # Augment for the command "input"
+])  # LQG controller B matrix augmented
 Kr = np.vstack(
     [Kr, np.zeros_like(Kr)],
 )  # Augment Kr to zero out tau2
@@ -567,10 +563,10 @@ Dc = np.hstack([
     np.zeros((2, n_outputs)),  # Actual LQG controller D matrix
     Kr  # Augmented for the command "input"
 ])  # LQG controller D matrix augmented for the command "input"
-print(f'Ac shape: {Ac.shape}, Bc shape: {Bc.shape}, Cc shape: {Cc.shape}, Dc shape: {Dc.shape}')
 sysc = control.ss(
     Ac, Bc, Cc, Dc,
-    inputs=['theta1_dn', 'theta2_dn', 'theta1_command', 'theta2_command',
+    inputs=['theta1_dn', 'theta2_dn', 
+        'theta1_command', 'theta2_command',
         'theta1_dot_command', 'theta2_dot_command'],
     outputs=['tau1', 'tau2'],
     states=['theta1_hat', 'theta2_hat', 
@@ -649,7 +645,7 @@ sys_cl = control.interconnect(
         'w_n1', 'w_n2'  # Measurement noise inputs
     ],  # External inputs
     # inplist=[],  # External inputs are connected by name
-    outputs=['theta1_dn', 'theta2_dn'],
+    outputs=['theta1_dn', 'theta2_dn', 'tau1', 'tau2'],
     # outlist=[]  # External outputs are connected by name
 )
 
@@ -659,36 +655,71 @@ sys_cl = control.interconnect(
 # Define the simulation function for the LQG-controlled system using the `control.forced_response()` function:
 
 #%%
-t_sim = np.linspace(0, 6, 1000)  # Simulation time
-x0 = np.array([1, 0, 0, 0]) * np.pi/180  # Initial state
+t_sim = np.linspace(0, 1, 1000)  # Simulation time
+x0 = np.array([0, np.pi, 0, 0])  # Initial state (use for observer too)
 command_inputs = [
-    0*np.ones_like(t_sim),  # theta1 command
-    np.zeros_like(t_sim),  # theta2 command
+    0.1*np.ones_like(t_sim),  # theta1 command
+    np.pi*np.ones_like(t_sim),  # theta2 command
     np.zeros_like(t_sim),  # theta1_dot command
     np.zeros_like(t_sim)  # theta2_dot command
 ]  # Command inputs
 disturbance_inputs = [
-    np.zeros((4, len(t_sim)))
+    1e-4*np.random.randn(4, len(t_sim)),
 ]  # Disturbances
 noise_inputs = [
-    np.zeros((2, len(t_sim)))  # Measurement noise
+    1e-4*np.random.randn(2, len(t_sim)),
 ]  # Measurement noise
-t, y = control.forced_response(
+lqr_response = control.forced_response(
     sys_cl,
     T=t_sim,
     U=command_inputs+disturbance_inputs+noise_inputs,
-    X0=x0
+    X0=np.concatenate([x0,x0])
 )
+y = lqr_response.outputs
+x = lqr_response.states
 
 #%% [markdown]
 # Plot the response of the system states and control inputs:
 
 #%%
-fig, ax = plt.subplots()
-ax.plot(t, y[0], label=r'$\theta_1$')
-ax.plot(t, y[1], label=r'$\theta_2$')
-ax.plot(t, command_inputs[0], 'k--', label=r'$\theta_1$ command')
-ax.plot(t, command_inputs[1], 'k:', label=r'$\theta_2$ command')
-ax.set_ylabel('Angle (rad)')
-ax.legend()
+fig, ax = plt.subplots(2, 1, figsize=(6, 6), sharex=True)
+ax[0].plot(t_sim, y[0], label=r'$\theta_1$')
+ax[0].plot(t_sim, y[1], label=r'$\theta_2$')
+ax[0].plot(t_sim, command_inputs[0], 'k--', label=r'$\theta_1$ command')
+ax[0].plot(t_sim, command_inputs[1], 'k:', label=r'$\theta_2$ command')
+ax[0].set_ylabel('Angle (rad)')
+ax[0].legend()
+ax[1].plot(t_sim, y[2], label=r'$\tau_1$')
+ax[1].plot(t_sim, y[3], label=r'$\tau_2$')
+ax[1].set_ylabel('Control Input (N*m)')
+ax[1].set_xlabel('Time (s)')
+ax[1].legend()
+plt.draw()
+
+#%% [markdown]
+# Plot the plant states and observer states:
+
+#%%
+fig, ax = plt.subplots(2, 1, figsize=(6, 6), sharex=True, sharey=True)
+ax[0].plot(t_sim, x[0], label=r'$\theta_1$')
+ax[0].plot(t_sim, x[1], label=r'$\theta_2$')
+ax[0].plot(t_sim, x[2], label=r'$\dot{\theta}_1$')
+ax[0].plot(t_sim, x[3], label=r'$\dot{\theta}_2$')
+ax[0].set_ylabel('State')
+ax[0].legend()
+ax[1].plot(t_sim, x[4], label=r'$\hat{\theta}_1$')
+ax[1].plot(t_sim, x[5], label=r'$\hat{\theta}_2$')
+ax[1].plot(t_sim, x[6], label=r'$\hat{\dot{\theta}}_1$')
+ax[1].plot(t_sim, x[7], label=r'$\hat{\dot{\theta}}_2$')
+ax[1].set_ylabel('Observer State')
+ax[1].set_xlabel('Time (s)')
+ax[1].legend()
+plt.draw()
+
+#%% [markdown]
+# Animate the response:
+
+#%%
+anim = animate_rotary_pendulum(t_sim, y, params, track_theta2=False)
 plt.show()
+# anim.save('lqg_control.gif', fps=30)
