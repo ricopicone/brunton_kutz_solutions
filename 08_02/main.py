@@ -272,7 +272,7 @@ def simulate_nonlinear_system(x0, t_sim, params, ufun):
 
 #%%
 t_sim = np.linspace(0, 10, 1000)  # Simulation time
-x0 = np.array([-40, 199, 0, 0]) * np.pi/180  # Initial state
+x0 = np.array([-4, 184, 0, 0]) * np.pi/180  # Initial state
 u0 = np.array([0, 0])  # Initial control input
 def ufun(t, x, tau1only=True):  # Control input function
     ufun.x_command = np.array([np.pi/3, np.pi, 0, 0])  # Command state (static)
@@ -295,6 +295,9 @@ x_sim = simulate_nonlinear_system(x0, t_sim, params, ufun)
 # Plot the response of the system states and control inputs:
 
 #%%
+print(f'xsim: {x_sim.y.shape}')
+print(f'tsim: {t_sim.shape}')
+print(f"xsim y: {x_sim.y}")
 fig, ax = plt.subplots(2, 1, figsize=(6, 6), sharex=True)
 ax[0].plot(t_sim, x_sim.y[0], label=r'$\theta_1$')
 ax[0].plot(t_sim, x_sim.y[1], label=r'$\theta_2$')
@@ -528,8 +531,10 @@ n_disturbances = 4  # Number of disturbance inputs
 n_noises = 2  # Number of measurement noise inputs
 stdd = 1e-3  # Standard deviation of disturbances
 stdn = 1e-2  # Standard deviation of measurement noise
-Vd = stdd**2 * np.diag(np.ones((n_disturbances,)))  # Disturbance covar
-Vn = stdn**2 * np.diag(np.ones((n_noises,)))  # Measurement noise covar
+# Vd = stdd**2 * np.diag(np.ones((n_disturbances,)))  # Disturbance covar
+# Vn = stdn**2 * np.diag(np.ones((n_noises,)))  # Measurement noise covar
+Vd = 1e0 * np.diag(np.ones((n_disturbances,)))  # Disturbance covar
+Vn = 1e-6 * np.diag(np.ones((n_noises,)))  # Measurement noise covar
 G = np.eye(A.shape[0])  # Disturbance input matrix
 Kf, P, E = control.lqe(A, G, C, Vd, Vn)
 
@@ -552,9 +557,18 @@ Kf, P, E = control.lqe(A, G, C, Vd, Vn)
 # The input is normally the noisy output of the plant $y$, but we will augment it with the command 4-vector $r$, which specifies the desired states.
 
 #%%
-n_in_aug = n_outputs + n_states  # Number of augmented inputs
-print(f"n_in_aug: {n_in_aug}")
-print(f"Kf: {Kf.shape}, C: {C.shape}")
+Q = np.diag([
+    1e2,  # theta1 error cost
+    1e2,  # theta2 error cost
+    1e-2,  # theta1 rate error cost
+    1e-2,  # theta2 rate error cost
+])  # State error cost matrix
+R = np.diag([
+    1e-3,  # tau1 cost
+])  # Control effort cost matrix
+sys_lin = control.ss(A, B, C, D)
+Kr, S, E = control.lqr(sys_lin, Q, R)
+print(f"B: {B},\nKr: {Kr},\n-BKr: {-B @ Kr}")
 Ac = A - Kf @ C - (B - Kf @ D) @ Kr  # LQG controller A matrix
 Bc = np.hstack([
     Kf,  # Actual LQG controller B matrix
@@ -562,11 +576,12 @@ Bc = np.hstack([
 ])  # LQG controller B matrix augmented
 Cc = np.vstack([
     -Kr,  # Actual LQG controller C matrix
-    np.zeros_like(Kr),  # Augmented to zero out tau2
+    np.zeros_like(Kr)  # Augmented to zero out tau2
 ])  # LQG controller C matrix augmented
 Dc = np.hstack([
-    np.zeros((2, n_outputs)),  # Actual LQG controller D matrix
-    -Cc,  # Augmented for the command "input"
+    D,  # LQG controller D matrix
+    np.zeros((2, 1)),  # Augmented to zero out tau2
+    -Cc  # Augmented for the command "input"
 ])  # LQG controller D matrix augmented
 print(f"Ac: {Ac.shape}, Bc: {Bc.shape}, Cc: {Cc.shape}, Dc: {Dc.shape}")
 sysc = control.ss(
@@ -676,7 +691,7 @@ sys_cl = control.interconnect(
 # Define the simulation function for the LQG-controlled system using the `control.forced_response()` function:
 
 #%%
-t_sim = np.linspace(0, 6, 1000)  # Simulation time
+t_sim = np.linspace(0, 2, 1000)  # Simulation time
 x0 = np.array([0, np.pi, 0, 0])  # Initial state
 x0_hat = np.array([0, 0, 0, 0])  # Initial observer state
 command_inputs = np.vstack([
@@ -685,10 +700,10 @@ command_inputs = np.vstack([
     np.zeros_like(t_sim),  # theta1_dot command
     np.zeros_like(t_sim)  # theta2_dot command
 ])  # Command inputs in observer coordinates (x - x_equliibrium)
-disturbance_inputs = stdd*np.random.randn(4, len(t_sim))  # Disturbances
-noise_inputs = stdn*np.random.randn(2, len(t_sim))  # Measurement noise
-# disturbance_inputs = 0*np.random.randn(4, len(t_sim))  # Disturbances
-# noise_inputs = 0*np.random.randn(2, len(t_sim))  # Measurement noise
+# disturbance_inputs = stdd*np.random.randn(4, len(t_sim))  # Disturbances
+# noise_inputs = stdn*np.random.randn(2, len(t_sim))  # Measurement noise
+disturbance_inputs = 0*np.random.randn(4, len(t_sim))  # Disturbances
+noise_inputs = 0*np.random.randn(2, len(t_sim))  # Measurement noise
 equilibrium_positions = np.vstack([
     np.zeros_like(t_sim),
     np.pi*np.ones_like(t_sim),
@@ -704,6 +719,8 @@ lqr_response = control.forced_response(
 )
 y = lqr_response.outputs
 x = lqr_response.states
+x[-4:-2] += equilibrium_positions  # Add equilibrium states back to the observer states
+command_inputs[:2] += equilibrium_positions  # Add equilibrium states back to the command inputs
 
 #%% [markdown]
 # Plot the response of the system states and control inputs:
@@ -727,7 +744,7 @@ plt.draw()
 # Plot the plant states and observer states:
 
 #%%
-fig, ax = plt.subplots(2, 1, figsize=(6, 6), sharex=True, sharey=True)
+fig, ax = plt.subplots(3, 1, figsize=(6, 6), sharex=True, sharey=True)
 ax[0].plot(t_sim, x[0], label=r'$\theta_1$')
 ax[0].plot(t_sim, x[1], label=r'$\theta_2$')
 ax[0].plot(t_sim, x[2], label=r'$\dot{\theta}_1$')
@@ -739,8 +756,14 @@ ax[1].plot(t_sim, x[5], label=r'$\hat{\theta}_2$')
 ax[1].plot(t_sim, x[6], label=r'$\hat{\dot{\theta}}_1$')
 ax[1].plot(t_sim, x[7], label=r'$\hat{\dot{\theta}}_2$')
 ax[1].set_ylabel('Observer State')
-ax[1].set_xlabel('Time (s)')
 ax[1].legend()
+ax[2].plot(t_sim, x[4] - x[0], label=r'$\theta_1 - \hat{\theta}_1$')
+ax[2].plot(t_sim, x[5] - x[1], label=r'$\theta_2 - \hat{\theta}_2$')
+ax[2].plot(t_sim, x[6] - x[2], label=r'$\dot{\theta}_1 - \hat{\dot{\theta}}_1$')
+ax[2].plot(t_sim, x[7] - x[3], label=r'$\dot{\theta}_2 - \hat{\dot{\theta}}_2$')
+ax[2].set_ylabel('Observer Error')
+ax[2].set_xlabel('Time (s)')
+ax[2].legend()
 plt.draw()
 
 #%% [markdown]
