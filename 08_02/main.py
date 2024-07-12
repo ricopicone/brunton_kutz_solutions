@@ -130,6 +130,15 @@ def rotary_inverted_pendulum(t, x, ufun, params):
     return dx_dt
 
 #%% [markdown]
+# Define lists to label the states and inputs:
+
+#%%
+state_names = ["theta1", "theta2", "theta1_dot", "theta2_dot"]
+state_labels = [r"$\theta_1$", r"$\theta_2$", r"$\dot{\theta}_1$", r"$\dot{\theta}_2$"]
+input_names = ["tau1", "tau2"]
+input_labels = [r"$\tau_1$", r"$\tau_2$"]
+
+#%% [markdown]
 # Define the linearized system dynamics.
 # The paper provides the linearized system dynamics in equations (35) and (36) for the unstable upright equilibrium point
 # $$
@@ -167,8 +176,10 @@ def get_AB(params, tau1only=True, upright=True):
     B42 = J0h / den
     if upright:
         sign = 1
+        get_AB.equilibrium = np.array([0, np.pi, 0, 0])
     else:
         sign = -1
+        get_AB.equilibrium = np.array([0, 0, 0, 0])
     A = np.array([
         [0, 0, 1, 0],
         [0, 0, 0, 1],
@@ -453,6 +464,19 @@ def get_C(params, sensor_config):
             [0, 0, 1, 0],  # theta1_dot
             [0, 0, 0, 1]  # theta2_dot
         ])
+    elif sensor_config == 4:
+        C = np.array([
+            [1, 0, 0, 0],  # theta1
+            [0, 1, 0, 0],  # theta2
+            [0, 0, 0, 1]  # theta2_dot
+        ])
+    elif sensor_config == 5:
+        C = np.array([
+            [1, 0, 0, 0],  # theta1
+            [0, 1, 0, 0],  # theta2
+            [0, 0, 1, 0],  # theta1_dot
+            [0, 0, 0, 1]  # theta2_dot
+        ])
     return C
 
 #%% [markdown]
@@ -522,20 +546,22 @@ for sensor_config in sensor_configs:
 
 #%%
 A, B = get_AB(params, tau1only=True)
-C = get_C(params, sensor_config=1)
+C = get_C(params, sensor_config=5)
+B = np.hstack([B, -A])  # Augment for equilibrium offset
 n_states = A.shape[0]  # Number of states
-n_inputs = B.shape[1]  # Number of control inputs
+n_inputs = B.shape[1]  # Number of inputs (controlled and equilibrium offset)
 n_outputs = C.shape[0]  # Number of outputs
-D = np.zeros((n_outputs, n_inputs))
-n_disturbances = 4  # Number of disturbance inputs
-n_noises = 2  # Number of measurement noise inputs
-stdd = 1e-3  # Standard deviation of disturbances
-stdn = 1e-2  # Standard deviation of measurement noise
-# Vd = stdd**2 * np.diag(np.ones((n_disturbances,)))  # Disturbance covar
-# Vn = stdn**2 * np.diag(np.ones((n_noises,)))  # Measurement noise covar
-Vd = 1e0 * np.diag(np.ones((n_disturbances,)))  # Disturbance covar
-Vn = 1e-6 * np.diag(np.ones((n_noises,)))  # Measurement noise covar
-G = np.eye(A.shape[0])  # Disturbance input matrix
+D = np.zeros((n_outputs, n_inputs - C.shape[1]))
+D = np.hstack([D, -C])  # Augment for equilibrium offset
+n_disturbances = n_states  # Number of disturbance inputs
+n_noises = n_outputs  # Number of measurement noise inputs
+stdd = 1e1  # Standard deviation of disturbances
+stdn = 1e-3  # Standard deviation of measurement noise
+Vd = stdd**2 * np.diag(np.ones((n_disturbances,)))  # Disturbance covar
+Vn = stdn**2 * np.diag(np.ones((n_noises,)))  # Measurement noise covar
+# Vd = 1e2 * np.diag(np.ones((n_disturbances,)))  # Disturbance covar
+# Vn = 1e-6 * np.diag(np.ones((n_noises,)))  # Measurement noise covar
+G = np.eye(n_states)  # Disturbance input matrix
 Kf, P, E = control.lqe(A, G, C, Vd, Vn)
 
 #%% [markdown]
@@ -558,43 +584,55 @@ Kf, P, E = control.lqe(A, G, C, Vd, Vn)
 
 #%%
 Q = np.diag([
-    1e2,  # theta1 error cost
-    1e2,  # theta2 error cost
-    1e-2,  # theta1 rate error cost
-    1e-2,  # theta2 rate error cost
+    1e4,  # theta1 error cost
+    1e4,  # theta2 error cost
+    1,  # theta1 rate error cost
+    1,  # theta2 rate error cost
 ])  # State error cost matrix
 R = np.diag([
-    1e-3,  # tau1 cost
+    1e0,  # tau1 cost
+    *1e15*np.ones(n_states)  # Augment for equilibrium offset
 ])  # Control effort cost matrix
+# Be = np.hstack([B, -A])  # Augment for equilibrium offset
+# De = np.hstack([D, -C])  # Augment for equilibrium offset
+print(f"A: {A.shape}, B: {B.shape}, C: {C.shape}, D: {D.shape}")
 sys_lin = control.ss(A, B, C, D)
 Kr, S, E = control.lqr(sys_lin, Q, R)
-print(f"B: {B},\nKr: {Kr},\n-BKr: {-B @ Kr}")
 Ac = A - Kf @ C - (B - Kf @ D) @ Kr  # LQG controller A matrix
 Bc = np.hstack([
     Kf,  # Actual LQG controller B matrix
-    np.zeros((n_states, 4))  # Augment for the command "input"
+    np.zeros((n_states, n_states)),  # Augment for the command "input"
+    # np.zeros_like(Ac),  # Augment for equilibrium offset
 ])  # LQG controller B matrix augmented
+print(f"Kr: {Kr.shape}")
+# Kr = Kr[:2]
+# Kr[1] = np.zeros_like(Kr[1])
 Cc = np.vstack([
     -Kr,  # Actual LQG controller C matrix
-    np.zeros_like(Kr)  # Augmented to zero out tau2
+    # np.zeros((1, n_states))  # Augmented to zero out tau2
 ])  # LQG controller C matrix augmented
+Cc = Cc[:2]
+Cc[1] = np.zeros_like(Cc[1])
+print(f"Cc: {Cc.shape}")
+# Cc = np.insert(Cc, [1], np.zeros((1, n_states)), axis=0)
+print(f"Cc: {Cc.shape}")
+print(f"Cc:\n{Cc}")
+print(f"C: {C.shape}")
+print(f"Kf: {Kf}, Kr: {Kr}")
 Dc = np.hstack([
-    D,  # LQG controller D matrix
-    np.zeros((2, 1)),  # Augmented to zero out tau2
-    -Cc  # Augmented for the command "input"
+    np.zeros((2, n_outputs)),  # LQG controller D matrix, +1 to zero out tau2
+    -Cc,  # Augmented for the command "input"
+    # Cc,  # Augmented for the equilibrium offset
 ])  # LQG controller D matrix augmented
 print(f"Ac: {Ac.shape}, Bc: {Bc.shape}, Cc: {Cc.shape}, Dc: {Dc.shape}")
-sysc = control.ss(
-    Ac, Bc, Cc, Dc,
-    inputs=['theta1_dne', 'theta2_dne', 
-        'theta1_command', 'theta2_command',
-        'theta1_dot_command', 'theta2_dot_command'],
-    outputs=['tau1', 'tau2'],
-    states=['theta1_hat', 'theta2_hat', 
-        'theta1_dot_hat', 'theta2_dot_hat'],
-    name='sysc'
-)  # LQG controller system
+print(f"Cc:\n{Cc}")
+print(f"Dc:\n{Dc}")
+sysc = control.ss(Ac, Bc, Cc, Dc, name='sysc')  # LQG controller system
+sysc.set_inputs(n_outputs+n_states, prefix='yre')  # Aug for command and eq off
+sysc.set_outputs(2, prefix='u')  # Control output
+sysc.set_states(n_states, prefix='x_hat')  # Observer state
 
+print(sysc)
 #%% [markdown]
 # Now create a `control.InputOutputSystem` object for the nonlinear plant.
 # Before we can do that, we need to define a plant function that can incorporate disturbances.
@@ -631,11 +669,11 @@ def rotary_inverted_pendulum_disturbed(t, x, v, params):
 def output_function_noised(t, x, v, params):
     """Output function for the rotary inverted pendulum system
     
-    Output function for the rotary inverted pendulum system with measurement noise.
+    Output function for the rotary inverted pendulum system with
+    measurement noise.
     """
-    n_noises = 2  # Number of measurement noise inputs
-    y = np.array([x[0], x[1]])  # Output is [theta1_dn, theta2_dn]
-    y += v[-n_noises:]  # Add the measurement noise
+    n_noises = n_outputs  # Number of measurement noise inputs
+    y = C @ x + D @ v[0:n_inputs] + v[-n_noises:]
     return y
 
 #%% [markdown]
@@ -645,12 +683,14 @@ def output_function_noised(t, x, v, params):
 sys_plant = control.NonlinearIOSystem(
     rotary_inverted_pendulum_disturbed,
     outfcn=output_function_noised,
-    inputs=['tau1', 'tau2', 'w_d1', 'w_d2', 'w_d3', 'w_d4', 'w_n1', 'w_n2'],
-    states=['theta1', 'theta2', 'theta1_dot', 'theta2_dot'],
-    outputs=['theta1_dn', 'theta2_dn'],
     name='sys_plant',
     params=params
 )
+sys_plant.set_inputs(2 + n_disturbances + n_noises, prefix='v')  # Augmented input
+sys_plant.set_states(n_states, prefix='x')  # State
+sys_plant.set_outputs(n_outputs, prefix='y')  # Output
+
+print(sys_plant)
 
 #%% [markdown]
 # The LQG controller system has states relative to the equilibrium.
@@ -658,32 +698,46 @@ sys_plant = control.NonlinearIOSystem(
 # We can do this by summing an additional input to the closed-loop system that specifies the equilibrium state, then subtracting it out with a summing junction into the LQG controller.
 
 #%%
-sum1 = control.summing_junction(
-    inputs=['theta1_dn', '-theta1_e'],
-    output='theta1_dne'
-)
-sum2 = control.summing_junction(
-    inputs=['theta2_dn', '-theta2_e'],
-    output='theta2_dne'
-)
+# sum1 = control.summing_junction(
+#     inputs=['theta1_dn', '-theta1_e'],
+#     output='theta1_dne'
+# )
+# sum2 = control.summing_junction(
+#     inputs=['theta2_dn', '-theta2_e'],
+#     output='theta2_dne'
+# )
 
 # Now we can connect the LQG controller to the nonlinear plant using the `control.interconnect()` function as follows:
 
 #%%
+cl_outputs_y = [f'y[{i}]' for i in range(n_outputs)]
+cl_outputs_u = [f'u[{i}]' for i in range(2)]
+cl_outputs = cl_outputs_y + cl_outputs_u
 sys_cl = control.interconnect(
-    syslist=[sys_plant, sysc, sum1, sum2],
-    # connections=[],  # Internal connections are connected by name
-    inputs=[
-        'theta1_command', 'theta2_command',  # Command inputs
-        'theta1_dot_command', 'theta2_dot_command', 
-        'w_d1', 'w_d2', 'w_d3', 'w_d4',  # Disturbance inputs
-        'w_n1', 'w_n2',  # Measurement noise inputs
-        'theta1_e', 'theta2_e'  # Equilibrium states
+    syslist=[sys_plant, sysc],
+    connections=[
+        [f'sys_plant.v[0:2]', 'sysc.u'],  # Connect plant input
+        [f'sysc.yre[0:{n_outputs}]', 'sys_plant.y'],  # Connect control input
+    ],  # Other internal connections are connected by name
+    inplist=[
+        f'sysc.yre[{n_outputs}:]', # xc
+        f'sys_plant.v[{2}:]',  # [wd, wn]
     ],  # External inputs
-    outputs=['theta1_dn', 'theta2_dn', 'tau1', 'tau2'],
+    # inputs=[
+    #     'theta1_command', 'theta2_command',  # Command inputs
+    #     'theta1_dot_command', 'theta2_dot_command', 
+    #     'w_d1', 'w_d2', 'w_d3', 'w_d4',  # Disturbance inputs
+    #     'w_n1', 'w_n2',  # Measurement noise inputs
+    #     'theta1_e', #'theta2_e'  # Equilibrium states
+    # ],  # External inputs
+    inputs=n_states + n_disturbances + n_noises,
+    outputs=cl_outputs,  # External outputs
     # outlist=[]  # External outputs are connected by name
     name='sys_cl'
 )
+
+print(sys_cl)
+print(sys_cl.connection_table())
 
 #%% [markdown]
 # ## Simulation with LQG Control
@@ -691,26 +745,26 @@ sys_cl = control.interconnect(
 # Define the simulation function for the LQG-controlled system using the `control.forced_response()` function:
 
 #%%
-t_sim = np.linspace(0, 2, 1000)  # Simulation time
-x0 = np.array([0, np.pi, 0, 0])  # Initial state
-x0_hat = np.array([0, 0, 0, 0])  # Initial observer state
+t_sim = np.linspace(0, 3, 1000)  # Simulation time
+xe = np.array([0, np.pi, 0, 0])  # Equilibrium state
+x0 = xe  # Initial state
+x0_hat = xe  # Initial observer state
 command_inputs = np.vstack([
-    0.1*np.ones_like(t_sim),  # theta1 command
-    np.zeros_like(t_sim),  # theta2 command
+    0.4*np.ones_like(t_sim),  # theta1 command
+    np.pi*np.ones_like(t_sim),  # theta2 command
     np.zeros_like(t_sim),  # theta1_dot command
     np.zeros_like(t_sim)  # theta2_dot command
 ])  # Command inputs in observer coordinates (x - x_equliibrium)
-# disturbance_inputs = stdd*np.random.randn(4, len(t_sim))  # Disturbances
-# noise_inputs = stdn*np.random.randn(2, len(t_sim))  # Measurement noise
-disturbance_inputs = 0*np.random.randn(4, len(t_sim))  # Disturbances
-noise_inputs = 0*np.random.randn(2, len(t_sim))  # Measurement noise
-equilibrium_positions = np.vstack([
-    np.zeros_like(t_sim),
-    np.pi*np.ones_like(t_sim),
-])  # Equilibrium states
+disturbance_inputs = 5e-3*np.random.randn(n_states, len(t_sim))  # Disturbances
+noise_inputs = stdn*np.random.randn(n_noises, len(t_sim))  # Measurement noise
+# disturbance_inputs = 0*np.random.randn(n_states, len(t_sim))  # Disturbances
+# noise_inputs = 0*np.random.randn(n_noises, len(t_sim))  # Measurement noise
 all_inputs = np.vstack([
-    command_inputs, disturbance_inputs, noise_inputs, equilibrium_positions
+    command_inputs, 
+    disturbance_inputs, 
+    noise_inputs
 ])  # All inputs
+print(f"all_inputs: {all_inputs.shape}")
 lqr_response = control.forced_response(
     sys_cl,
     T=t_sim,
@@ -719,22 +773,20 @@ lqr_response = control.forced_response(
 )
 y = lqr_response.outputs
 x = lqr_response.states
-x[-4:-2] += equilibrium_positions  # Add equilibrium states back to the observer states
-command_inputs[:2] += equilibrium_positions  # Add equilibrium states back to the command inputs
+x_hat = x[n_states:]  # Observer states
 
 #%% [markdown]
 # Plot the response of the system states and control inputs:
 
 #%%
 fig, ax = plt.subplots(2, 1, figsize=(6, 6), sharex=True)
-ax[0].plot(t_sim, y[0], label=r'$\theta_1$')
-ax[0].plot(t_sim, y[1], label=r'$\theta_2$')
-ax[0].plot(t_sim, command_inputs[0], 'k--', label=r'$\theta_1$ command')
-ax[0].plot(t_sim, command_inputs[1], 'k:', label=r'$\theta_2$ command')
+for i, label in enumerate(state_labels[0:2]):
+    ax[0].plot(t_sim, command_inputs[i], f"k{['--',':'][i]}", label=f'{label} command')
+    ax[0].plot(t_sim, x[i], label=label)  # theta1, theta2
 ax[0].set_ylabel('Angle (rad)')
 ax[0].legend()
-ax[1].plot(t_sim, y[2], label=r'$\tau_1$')
-ax[1].plot(t_sim, y[3], label=r'$\tau_2$')
+for i, label in enumerate(input_labels):
+    ax[1].plot(t_sim, y[n_outputs+i], label=label)
 ax[1].set_ylabel('Control Input (N*m)')
 ax[1].set_xlabel('Time (s)')
 ax[1].legend()
@@ -744,23 +796,21 @@ plt.draw()
 # Plot the plant states and observer states:
 
 #%%
+state_hat_labels = [
+    r'$\hat{\theta}_1$', r'$\hat{\theta}_2$', 
+    r'$\hat{\dot{\theta}}_1$', r'$\hat{\dot{\theta}}_2$'
+]
 fig, ax = plt.subplots(3, 1, figsize=(6, 6), sharex=True, sharey=True)
-ax[0].plot(t_sim, x[0], label=r'$\theta_1$')
-ax[0].plot(t_sim, x[1], label=r'$\theta_2$')
-ax[0].plot(t_sim, x[2], label=r'$\dot{\theta}_1$')
-ax[0].plot(t_sim, x[3], label=r'$\dot{\theta}_2$')
+for i, label in enumerate(state_labels):
+    ax[0].plot(t_sim, x[i], label=label)
 ax[0].set_ylabel('State')
 ax[0].legend()
-ax[1].plot(t_sim, x[4], label=r'$\hat{\theta}_1$')
-ax[1].plot(t_sim, x[5], label=r'$\hat{\theta}_2$')
-ax[1].plot(t_sim, x[6], label=r'$\hat{\dot{\theta}}_1$')
-ax[1].plot(t_sim, x[7], label=r'$\hat{\dot{\theta}}_2$')
+for i, label in enumerate(state_hat_labels):
+    ax[1].plot(t_sim, x_hat[i], label=label)
 ax[1].set_ylabel('Observer State')
 ax[1].legend()
-ax[2].plot(t_sim, x[4] - x[0], label=r'$\theta_1 - \hat{\theta}_1$')
-ax[2].plot(t_sim, x[5] - x[1], label=r'$\theta_2 - \hat{\theta}_2$')
-ax[2].plot(t_sim, x[6] - x[2], label=r'$\dot{\theta}_1 - \hat{\dot{\theta}}_1$')
-ax[2].plot(t_sim, x[7] - x[3], label=r'$\dot{\theta}_2 - \hat{\dot{\theta}}_2$')
+for i, label in enumerate(state_labels):
+    ax[2].plot(t_sim, x_hat[i] - x[i], label=f'{state_hat_labels[i]} $-$ {label}')
 ax[2].set_ylabel('Observer Error')
 ax[2].set_xlabel('Time (s)')
 ax[2].legend()
@@ -770,6 +820,6 @@ plt.draw()
 # Animate the response:
 
 #%%
-anim = animate_rotary_pendulum(t_sim, y, params, track_theta2=False)
+anim = animate_rotary_pendulum(t_sim, x, params, track_theta2=False)
 plt.show()
 # anim.save('lqg_control.gif', fps=30)
