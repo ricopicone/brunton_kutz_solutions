@@ -20,8 +20,8 @@ params = {
     'L2': 1.0,  # m
     'J0h': 1.0,  # kg*m^2
     'J2h': 1.0,  # kg*m^2
-    'b1': 0.1,  # N*m*s/rad
-    'b2': 0.1,  # N*m*s/rad
+    'b1': 0.01,  # N*m*s/rad
+    'b2': 0.01,  # N*m*s/rad
     'g': 9.81  # m/s^2
 }
 
@@ -547,12 +547,12 @@ for sensor_config in sensor_configs:
 #%%
 A, B = get_AB(params, tau1only=True)
 C = get_C(params, sensor_config=5)
-B = np.hstack([B, -A])  # Augment for equilibrium offset
+# B = np.hstack([B, -A])  # Augment for equilibrium offset
 n_states = A.shape[0]  # Number of states
 n_inputs = B.shape[1]  # Number of inputs (controlled and equilibrium offset)
 n_outputs = C.shape[0]  # Number of outputs
-D = np.zeros((n_outputs, n_inputs - C.shape[1]))
-D = np.hstack([D, -C])  # Augment for equilibrium offset
+D = np.zeros((n_outputs, n_inputs))
+# D = np.hstack([D, -C])  # Augment for equilibrium offset
 n_disturbances = n_states  # Number of disturbance inputs
 n_noises = n_outputs  # Number of measurement noise inputs
 stdd = 1e1  # Standard deviation of disturbances
@@ -591,7 +591,6 @@ Q = np.diag([
 ])  # State error cost matrix
 R = np.diag([
     1e0,  # tau1 cost
-    *1e15*np.ones(n_states)  # Augment for equilibrium offset
 ])  # Control effort cost matrix
 # Be = np.hstack([B, -A])  # Augment for equilibrium offset
 # De = np.hstack([D, -C])  # Augment for equilibrium offset
@@ -599,20 +598,27 @@ print(f"A: {A.shape}, B: {B.shape}, C: {C.shape}, D: {D.shape}")
 sys_lin = control.ss(A, B, C, D)
 Kr, S, E = control.lqr(sys_lin, Q, R)
 Ac = A - Kf @ C - (B - Kf @ D) @ Kr  # LQG controller A matrix
+Ac = np.vstack([
+    np.hstack([Ac, Ac]),
+    np.zeros((n_states, 2*n_states))  # Augment for equilibrium offset
+])  # LQG controller A matrix augmented
 Bc = np.hstack([
     Kf,  # Actual LQG controller B matrix
     np.zeros((n_states, n_states)),  # Augment for the command "input"
     # np.zeros_like(Ac),  # Augment for equilibrium offset
 ])  # LQG controller B matrix augmented
-print(f"Kr: {Kr.shape}")
-# Kr = Kr[:2]
-# Kr[1] = np.zeros_like(Kr[1])
-Cc = np.vstack([
+Bc = np.vstack([
+    Bc,
+    np.zeros((n_states, Bc.shape[1]))  # Augment for equilibrium offset
+])  # LQG controller B matrix augmented for equilibrium offset
+Cc1 = np.vstack([
     -Kr,  # Actual LQG controller C matrix
-    # np.zeros((1, n_states))  # Augmented to zero out tau2
+    np.zeros((1, n_states)),  # Zero out tau2
+])  # LQG controller C matrix partially augmented
+Cc = np.hstack([
+    Cc1,
+    np.zeros((2, n_states)),  # Augmented for the equilibrium offset
 ])  # LQG controller C matrix augmented
-Cc = Cc[:2]
-Cc[1] = np.zeros_like(Cc[1])
 print(f"Cc: {Cc.shape}")
 # Cc = np.insert(Cc, [1], np.zeros((1, n_states)), axis=0)
 print(f"Cc: {Cc.shape}")
@@ -621,8 +627,9 @@ print(f"C: {C.shape}")
 print(f"Kf: {Kf}, Kr: {Kr}")
 Dc = np.hstack([
     np.zeros((2, n_outputs)),  # LQG controller D matrix, +1 to zero out tau2
-    -Cc,  # Augmented for the command "input"
+    -Cc1,  # Augmented for the command "input"
     # Cc,  # Augmented for the equilibrium offset
+    # np.zeros((2, n_outputs)),  # Augmented for the equilibrium offset
 ])  # LQG controller D matrix augmented
 print(f"Ac: {Ac.shape}, Bc: {Bc.shape}, Cc: {Cc.shape}, Dc: {Dc.shape}")
 print(f"Cc:\n{Cc}")
@@ -630,7 +637,7 @@ print(f"Dc:\n{Dc}")
 sysc = control.ss(Ac, Bc, Cc, Dc, name='sysc')  # LQG controller system
 sysc.set_inputs(n_outputs+n_states, prefix='yre')  # Aug for command and eq off
 sysc.set_outputs(2, prefix='u')  # Control output
-sysc.set_states(n_states, prefix='x_hat')  # Observer state
+sysc.set_states(2*n_states, prefix='x_hat')  # Observer state
 
 print(sysc)
 #%% [markdown]
@@ -698,15 +705,7 @@ print(sys_plant)
 # We can do this by summing an additional input to the closed-loop system that specifies the equilibrium state, then subtracting it out with a summing junction into the LQG controller.
 
 #%%
-# sum1 = control.summing_junction(
-#     inputs=['theta1_dn', '-theta1_e'],
-#     output='theta1_dne'
-# )
-# sum2 = control.summing_junction(
-#     inputs=['theta2_dn', '-theta2_e'],
-#     output='theta2_dne'
-# )
-
+# ...
 # Now we can connect the LQG controller to the nonlinear plant using the `control.interconnect()` function as follows:
 
 #%%
@@ -723,16 +722,8 @@ sys_cl = control.interconnect(
         f'sysc.yre[{n_outputs}:]', # xc
         f'sys_plant.v[{2}:]',  # [wd, wn]
     ],  # External inputs
-    # inputs=[
-    #     'theta1_command', 'theta2_command',  # Command inputs
-    #     'theta1_dot_command', 'theta2_dot_command', 
-    #     'w_d1', 'w_d2', 'w_d3', 'w_d4',  # Disturbance inputs
-    #     'w_n1', 'w_n2',  # Measurement noise inputs
-    #     'theta1_e', #'theta2_e'  # Equilibrium states
-    # ],  # External inputs
     inputs=n_states + n_disturbances + n_noises,
     outputs=cl_outputs,  # External outputs
-    # outlist=[]  # External outputs are connected by name
     name='sys_cl'
 )
 
@@ -748,13 +739,14 @@ print(sys_cl.connection_table())
 t_sim = np.linspace(0, 3, 1000)  # Simulation time
 xe = np.array([0, np.pi, 0, 0])  # Equilibrium state
 x0 = xe  # Initial state
-x0_hat = xe  # Initial observer state
+x0_hat_prime = np.array([0, 0, 0, 0])  # Initial observer state
 command_inputs = np.vstack([
     0.4*np.ones_like(t_sim),  # theta1 command
     np.pi*np.ones_like(t_sim),  # theta2 command
     np.zeros_like(t_sim),  # theta1_dot command
     np.zeros_like(t_sim)  # theta2_dot command
-])  # Command inputs in observer coordinates (x - x_equliibrium)
+])  # Command inputs in original coordinates
+command_inputs = command_inputs - np.atleast_2d(xe).T  # Command inputs in linearized coordinates
 disturbance_inputs = 5e-3*np.random.randn(n_states, len(t_sim))  # Disturbances
 noise_inputs = stdn*np.random.randn(n_noises, len(t_sim))  # Measurement noise
 # disturbance_inputs = 0*np.random.randn(n_states, len(t_sim))  # Disturbances
@@ -769,11 +761,12 @@ lqr_response = control.forced_response(
     sys_cl,
     T=t_sim,
     U=all_inputs,
-    X0=np.concatenate([x0,x0_hat])
+    X0=np.concatenate([x0, x0_hat_prime, xe]),
 )
 y = lqr_response.outputs
 x = lqr_response.states
-x_hat = x[n_states:]  # Observer states
+x_hat_prime = x[n_states:2*n_states]  # Observer states
+x_hat = x_hat_prime + np.atleast_2d(xe).T  # Observer states in original coordinates
 
 #%% [markdown]
 # Plot the response of the system states and control inputs:
