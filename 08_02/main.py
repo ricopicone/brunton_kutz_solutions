@@ -528,15 +528,19 @@ for sensor_config in sensor_configs:
 # Define the observer gain matrix using the control library.
 # Larger values in the observer weighting matrices $V_d$ and $V_n$ will make the observer more sensitive to disturbances (i.e., process noise) and measurement noise, respectively.
 # The linear state equation assumed for the observer design is
-# \begin{align*}
+# $$
+# \begin{aligned}[t]
 # \dot{x}' &= A x' + B u + G w_d \\
 # y &= C x' + D u + w_n
-# \end{align*}
+# \end{aligned}
+# $$
 # where $w_d$ is the disturbance input, $G$ is the disturbance input matrix, and $w_n$ is the measurement noise.
 # The observer dynamics are given by
-# \begin{align*}
+# $$
+# \begin{aligned}[t]
 # \dot{\hat{x}}' &= \left(A - K_f C - (B - K_f D) K_r \right) \hat{x}' + K_f y, \\
-# \end{align*}
+# \end{aligned}
+# $$
 # where $\hat{x}'$ is the state estimate (in the coordinates of the linearized system), $K_f$ is the observer gain matrix, and $K_r$ is the control gain matrix.
 # 
 # The observer gain matrix $K_f$ can be computed using the control library function `control.lqe()` as follows:
@@ -573,7 +577,8 @@ Kf, P, E = control.lqe(A, G, C, Vd, Vn)
 #
 # The approach we use is to add the equilibrium offset to the observer state, resulting in twice the number of states.
 # The equilibrium-augmented observer dynamics are given by
-# \begin{align*}
+# $$
+# \begin{aligned}[t]
 # \frac{d}{dt} \begin{bmatrix} \hat{x}' \\ x_e \end{bmatrix} &= 
 # \begin{bmatrix}
 #   A_c & A_c \\
@@ -581,11 +586,12 @@ Kf, P, E = control.lqe(A, G, C, Vd, Vn)
 # \end{bmatrix}
 # \begin{bmatrix} \hat{x}' \\ x_e \end{bmatrix} + 
 # \begin{bmatrix} K_f \\ 0 \end{bmatrix} y, \\
-# \end{align*}
+# \end{aligned}
+# $$
 # where $A_c = A - K_f C - (B - K_f D) K_r$, the original observer dynamics matrix, and the zeros are appropriately sized 0-matrices.
 # The corresponding output equation is
 # $$
-# u = \begin{bmatrix} -K_f & 0 \end{bmatrix} \begin{bmatrix} \hat{x} \\ x_e \end{bmatrix}.
+# u = \begin{bmatrix} -K_f & 0 \end{bmatrix} \begin{bmatrix} \hat{x}' \\ x_e \end{bmatrix}.
 # $$
 # Note that the equilibrium offset $x_e$ is not affected by the observer dynamics (i.e., it doesn't change).
 # Now the dynamics have been corrected for the equilibrium offset.
@@ -595,7 +601,8 @@ Kf, P, E = control.lqe(A, G, C, Vd, Vn)
 # We cannot use the same approach as we did for the equilibrium offset because we would like to be able to vary the command state.
 # The approach we use is similar to the one used for the LQR controller: we augment the input vector with the command state.
 # The command-and-equilibrium-augmented observer dynamics are given by
-# \begin{align*}
+# $$
+# \begin{aligned}[t]
 # \frac{d}{dt} \begin{bmatrix} \hat{x}' \\ x_e \end{bmatrix} &=
 # \begin{bmatrix}
 #   A_c & A_c \\
@@ -603,13 +610,15 @@ Kf, P, E = control.lqe(A, G, C, Vd, Vn)
 # \end{bmatrix}
 # \begin{bmatrix} \hat{x}' \\ x_e \end{bmatrix} +
 # \begin{bmatrix} K_f & 0 \\ 0 & 0 \end{bmatrix} \begin{bmatrix} y \\ x_r \end{bmatrix}.
-# \end{align*}
+# \end{aligned}
+# $$
 # So the dynamics themselves are not affected by the command state.
 # Its effects are only seen in the output equation, given by
 # $$
 # u = \begin{bmatrix} -K_f & 0 \end{bmatrix}
 #   \begin{bmatrix} \hat{x}' \\ x_e \end{bmatrix} +
 #   \begin{bmatrix} 0 & K_f \end{bmatrix} \begin{bmatrix} y \\ x_r \end{bmatrix}.
+# $$
 #
 # When the plant is actually linear, the closed-loop system can be represented as a single state-space system.
 # In our case, the plant is nonlinear, so we will need to model the LQG controller as a separate system, which will be used to compute the control input $u$ at each time step.

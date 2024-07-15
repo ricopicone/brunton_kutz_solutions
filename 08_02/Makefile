@@ -1,6 +1,6 @@
 .PHONY: main
 	
-title = Brunton and Kutz Problem 8.2: Optimal Control of a Rotary Inverted Pendulum
+title = Brunton and Kutz Problem 8.2: Optimal Control and Estimation of a Rotary Inverted Pendulum
 author = Rico A. R. Picone
 
 main: main.pdf # Default document(s) to make
