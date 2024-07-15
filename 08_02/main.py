@@ -568,7 +568,7 @@ Kf, P, E = control.lqe(A, G, C, Vd, Vn)
 # The LQG controller combines the LQR controller with the LQE observer.
 # The control input is computed as
 # $$
-# u = -K_f \hat{x}.
+# u = -K_r \hat{x}.
 # $$
 # The observer dynamics have already been defined, above.
 # The LQG controller, then, is a dynamic system with input $y$, internal state $\hat{x}$, and output $u$.
@@ -591,7 +591,7 @@ Kf, P, E = control.lqe(A, G, C, Vd, Vn)
 # where $A_c = A - K_f C - (B - K_f D) K_r$, the original observer dynamics matrix, and the zeros are appropriately sized 0-matrices.
 # The corresponding output equation is
 # $$
-# u = \begin{bmatrix} -K_f & 0 \end{bmatrix} \begin{bmatrix} \hat{x}' \\ x_e \end{bmatrix}.
+# u = \begin{bmatrix} -K_r & 0 \end{bmatrix} \begin{bmatrix} \hat{x}' \\ x_e \end{bmatrix}.
 # $$
 # Note that the equilibrium offset $x_e$ is not affected by the observer dynamics (i.e., it doesn't change).
 # Now the dynamics have been corrected for the equilibrium offset.
@@ -615,9 +615,9 @@ Kf, P, E = control.lqe(A, G, C, Vd, Vn)
 # So the dynamics themselves are not affected by the command state.
 # Its effects are only seen in the output equation, given by
 # $$
-# u = \begin{bmatrix} -K_f & 0 \end{bmatrix}
+# u = \begin{bmatrix} -K_r & 0 \end{bmatrix}
 #   \begin{bmatrix} \hat{x}' \\ x_e \end{bmatrix} +
-#   \begin{bmatrix} 0 & K_f \end{bmatrix} \begin{bmatrix} y \\ x_r \end{bmatrix}.
+#   \begin{bmatrix} 0 & K_r \end{bmatrix} \begin{bmatrix} y \\ x_r \end{bmatrix}.
 # $$
 #
 # When the plant is actually linear, the closed-loop system can be represented as a single state-space system.
