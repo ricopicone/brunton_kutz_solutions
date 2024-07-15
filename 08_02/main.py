@@ -146,6 +146,8 @@ input_labels = [r"$\tau_1$", r"$\tau_2$"]
 # $$
 # It includes torque inputs $\tau_1$ and $\tau_2$, but we will only consider $\tau_1$ in accordance with the problem statement.
 # This equilibrium point can be derived by setting the nonlinear system dynamics to zero and solving for the state variables.
+# The state vector for the linearized system is $x' = x - x_e$.
+# Consider the following function:
 
 #%%
 def get_AB(params, tau1only=True, upright=True):
@@ -220,6 +222,7 @@ print(f'Full rank: {full_rank}')
 #%% [markdown]
 # Since the controllability matrix has full rank, the system is controllable.
 # It would be more controllable if both torque inputs $\tau_1$ and $\tau_2$ were used, but it is remarkable that the system is controllable with only one input.
+# The controllability gramian could be used to quantify the controllability of the system.
 #
 # ## Full-State Feedback LQR Control
 # 
@@ -284,7 +287,6 @@ def simulate_nonlinear_system(x0, t_sim, params, ufun):
 #%%
 t_sim = np.linspace(0, 10, 1000)  # Simulation time
 x0 = np.array([-4, 184, 0, 0]) * np.pi/180  # Initial state
-u0 = np.array([0, 0])  # Initial control input
 def ufun(t, x, tau1only=True):  # Control input function
     ufun.x_command = np.array([np.pi/3, np.pi, 0, 0])  # Command state (static)
     u =  lqr_control(x, ufun.x_command, Kr)
@@ -306,9 +308,6 @@ x_sim = simulate_nonlinear_system(x0, t_sim, params, ufun)
 # Plot the response of the system states and control inputs:
 
 #%%
-print(f'xsim: {x_sim.y.shape}')
-print(f'tsim: {t_sim.shape}')
-print(f"xsim y: {x_sim.y}")
 fig, ax = plt.subplots(2, 1, figsize=(6, 6), sharex=True)
 ax[0].plot(t_sim, x_sim.y[0], label=r'$\theta_1$')
 ax[0].plot(t_sim, x_sim.y[1], label=r'$\theta_2$')
@@ -407,7 +406,6 @@ def animate_rotary_pendulum(t, x, params, track_theta2=False):
     anim = FuncAnimation(fig, update, frames=range(len(t)), blit=True, interval=6)
     return anim
 
-
 #%% [markdown]
 # Animate the response:
 
@@ -436,12 +434,12 @@ plt.draw()
 # ## Observability
 #
 # Explore the observability of the system.
-# We define three different sensor configurations:
+# We carefully consider the observability of three different sensor configurations:
 # 1. Observe $\theta_1$ and $\theta_2$
-# 2. Observe $\dot{\theta}_1$ and $\dot{\theta}_2$
-# 3. Observe $\theta_1$ and $\dot{\theta}_1$
+# 2. Observe $\theta_1$ and $\dot{\theta}_2$
+# 3. Observe $\dot{\theta}_1$ and $\dot{\theta}_2$
 #
-# Define the output equation $C$ matrix for each sensor configuration:
+# Define the output equation $C$ matrix for each sensor configuration (and a couple of others):
 
 #%%
 def get_C(params, sensor_config):
@@ -494,7 +492,7 @@ for sensor_config in sensor_configs:
     print(f'\tFull rank: {full_rank}')
 
 #%% [markdown]
-# So the system is observable for sensor configurations 1 and 2 only, but not for 3.
+# Of the three considered, the system is observable for sensor configurations 1 and 2 only, but not for 3.
 # Now explore which of sensor configurations 1 and 2 is more observable.
 # We can compute the observability Gramian for each configuration and compare its eigenvalues.
 # The control library function `control.gram()` can compute the observability Gramian.
@@ -523,7 +521,7 @@ for sensor_config in sensor_configs:
 # We also observe that the observability Gramian for configuration 3 is singular, which is another way of determining that it is not observable for that configuration.
 #
 # As a practical matter, it is easier to measure angular position than angular velocity.
-# Therefore, we will go forward with sensor configuration 1 (observe $\theta_1$ and $\theta_2) for the observer design.
+# Below, we will consider sensor configuration 5, which is the most observable configuration because it measures all four states.
 #
 # ## Full-State Observer Design
 #
@@ -531,36 +529,31 @@ for sensor_config in sensor_configs:
 # Larger values in the observer weighting matrices $V_d$ and $V_n$ will make the observer more sensitive to disturbances (i.e., process noise) and measurement noise, respectively.
 # The linear state equation assumed for the observer design is
 # \begin{align*}
-# \dot{x} &= A x + B u + G w_d \\
-# y &= C x + D u + w_n
+# \dot{x}' &= A x' + B u + G w_d \\
+# y &= C x' + D u + w_n
 # \end{align*}
 # where $w_d$ is the disturbance input, $G$ is the disturbance input matrix, and $w_n$ is the measurement noise.
 # The observer dynamics are given by
 # \begin{align*}
-# \dot{\hat{x}} &= A \hat{x} + B u + K_f (y - C \hat{x} - D u) \\
-# &= (A - K_f C) \hat{x} + (B - K_f D) u + K_f y \\
-# &= (A - K_f C) \hat{x} + \begin{bmatrix} K_f & (B - K_f D) \end{bmatrix} \begin{bmatrix} y \\ u \end{bmatrix},
+# \dot{\hat{x}}' &= \left(A - K_f C - (B - K_f D) K_r \right) \hat{x}' + K_f y, \\
 # \end{align*}
-# where $\hat{x}$ is the state estimate and $K_f$ is the observer gain matrix.
+# where $\hat{x}'$ is the state estimate (in the coordinates of the linearized system), $K_f$ is the observer gain matrix, and $K_r$ is the control gain matrix.
+# 
 # The observer gain matrix $K_f$ can be computed using the control library function `control.lqe()` as follows:
 
 #%%
 A, B = get_AB(params, tau1only=True)
 C = get_C(params, sensor_config=5)
-# B = np.hstack([B, -A])  # Augment for equilibrium offset
 n_states = A.shape[0]  # Number of states
-n_inputs = B.shape[1]  # Number of inputs (controlled and equilibrium offset)
+n_inputs = B.shape[1]  # Number of inputs
 n_outputs = C.shape[0]  # Number of outputs
-D = np.zeros((n_outputs, n_inputs))
-# D = np.hstack([D, -C])  # Augment for equilibrium offset
 n_disturbances = n_states  # Number of disturbance inputs
 n_noises = n_outputs  # Number of measurement noise inputs
+D = np.zeros((n_outputs, n_inputs))
 stdd = 1e1  # Standard deviation of disturbances
 stdn = 1e-3  # Standard deviation of measurement noise
 Vd = stdd**2 * np.diag(np.ones((n_disturbances,)))  # Disturbance covar
 Vn = stdn**2 * np.diag(np.ones((n_noises,)))  # Measurement noise covar
-# Vd = 1e2 * np.diag(np.ones((n_disturbances,)))  # Disturbance covar
-# Vn = 1e-6 * np.diag(np.ones((n_noises,)))  # Measurement noise covar
 G = np.eye(n_states)  # Disturbance input matrix
 Kf, P, E = control.lqe(A, G, C, Vd, Vn)
 
@@ -574,13 +567,54 @@ Kf, P, E = control.lqe(A, G, C, Vd, Vn)
 # u = -K_f \hat{x}.
 # $$
 # The observer dynamics have already been defined, above.
-# The LQG controller, then, is a dynamic system with input $u$, internal state $\hat{x}$, and output $u$.
+# The LQG controller, then, is a dynamic system with input $y$, internal state $\hat{x}$, and output $u$.
+# However, the dynamical equation is in terms of the estimated state of the linearized system $\hat{x}'$, not $\hat{x} = \hat{x}' + x_e$.
+# To deploy the LQG controller, we will need to augment the dynamical equation to account for the equilibrium offset.
 #
-# When the plant is linear, the closed-loop system can be represented as a single state-space system.
+# The approach we use is to add the equilibrium offset to the observer state, resulting in twice the number of states.
+# The equilibrium-augmented observer dynamics are given by
+# \begin{align*}
+# \frac{d}{dt} \begin{bmatrix} \hat{x}' \\ x_e \end{bmatrix} &= 
+# \begin{bmatrix}
+#   A_c & A_c \\
+#   0 & 0
+# \end{bmatrix}
+# \begin{bmatrix} \hat{x}' \\ x_e \end{bmatrix} + 
+# \begin{bmatrix} K_f \\ 0 \end{bmatrix} y, \\
+# \end{align*}
+# where $A_c = A - K_f C - (B - K_f D) K_r$, the original observer dynamics matrix, and the zeros are appropriately sized 0-matrices.
+# The corresponding output equation is
+# $$
+# u = \begin{bmatrix} -K_f & 0 \end{bmatrix} \begin{bmatrix} \hat{x} \\ x_e \end{bmatrix}.
+# $$
+# Note that the equilibrium offset $x_e$ is not affected by the observer dynamics (i.e., it doesn't change).
+# Now the dynamics have been corrected for the equilibrium offset.
+# Note that this would unnecessary if the equilibrium offset were zero.
+#
+# A second augmentation is needed to introduce the command state $x_r$.
+# We cannot use the same approach as we did for the equilibrium offset because we would like to be able to vary the command state.
+# The approach we use is similar to the one used for the LQR controller: we augment the input vector with the command state.
+# The command-and-equilibrium-augmented observer dynamics are given by
+# \begin{align*}
+# \frac{d}{dt} \begin{bmatrix} \hat{x}' \\ x_e \end{bmatrix} &=
+# \begin{bmatrix}
+#   A_c & A_c \\
+#   0 & 0
+# \end{bmatrix}
+# \begin{bmatrix} \hat{x}' \\ x_e \end{bmatrix} +
+# \begin{bmatrix} K_f & 0 \\ 0 & 0 \end{bmatrix} \begin{bmatrix} y \\ x_r \end{bmatrix}.
+# \end{align*}
+# So the dynamics themselves are not affected by the command state.
+# Its effects are only seen in the output equation, given by
+# $$
+# u = \begin{bmatrix} -K_f & 0 \end{bmatrix}
+#   \begin{bmatrix} \hat{x}' \\ x_e \end{bmatrix} +
+#   \begin{bmatrix} 0 & K_f \end{bmatrix} \begin{bmatrix} y \\ x_r \end{bmatrix}.
+#
+# When the plant is actually linear, the closed-loop system can be represented as a single state-space system.
 # In our case, the plant is nonlinear, so we will need to model the LQG controller as a separate system, which will be used to compute the control input $u$ at each time step.
 # Perhaps the easiest way to do this is to use the control library to create a state-space system for the plant and the LQG controller, then connect them with the `control.interconnect()` function.
-# Begin with defining the LQG controller, which has state $\hat{x}$.
-# The input is normally the noisy output of the plant $y$, but we will augment it with the command 4-vector $r$, which specifies the desired states.
+# Begin by defining the LQR controller as follows:
 
 #%%
 Q = np.diag([
@@ -592,11 +626,14 @@ Q = np.diag([
 R = np.diag([
     1e0,  # tau1 cost
 ])  # Control effort cost matrix
-# Be = np.hstack([B, -A])  # Augment for equilibrium offset
-# De = np.hstack([D, -C])  # Augment for equilibrium offset
-print(f"A: {A.shape}, B: {B.shape}, C: {C.shape}, D: {D.shape}")
-sys_lin = control.ss(A, B, C, D)
+sys_lin = control.ss(A, B, C, D)  # Ignore augmented states for now
 Kr, S, E = control.lqr(sys_lin, Q, R)
+
+#%% [markdown]
+# Define the LQG controller system using the control library.
+# In addition to the equilibrium and command augmentations, there is a third augmentation in the following to account for the fact that our model of the plant as having two inputs $\tau_1$ and $\tau_2$, but we are only using $\tau_1$ (i.e., we must zero out $\tau_2$):
+
+#%%
 Ac = A - Kf @ C - (B - Kf @ D) @ Kr  # LQG controller A matrix
 Ac = np.vstack([
     np.hstack([Ac, Ac]),
@@ -605,12 +642,11 @@ Ac = np.vstack([
 Bc = np.hstack([
     Kf,  # Actual LQG controller B matrix
     np.zeros((n_states, n_states)),  # Augment for the command "input"
-    # np.zeros_like(Ac),  # Augment for equilibrium offset
 ])  # LQG controller B matrix augmented
 Bc = np.vstack([
     Bc,
     np.zeros((n_states, Bc.shape[1]))  # Augment for equilibrium offset
-])  # LQG controller B matrix augmented for equilibrium offset
+])  # LQG controller B matrix augmented
 Cc1 = np.vstack([
     -Kr,  # Actual LQG controller C matrix
     np.zeros((1, n_states)),  # Zero out tau2
@@ -619,27 +655,16 @@ Cc = np.hstack([
     Cc1,
     np.zeros((2, n_states)),  # Augmented for the equilibrium offset
 ])  # LQG controller C matrix augmented
-print(f"Cc: {Cc.shape}")
-# Cc = np.insert(Cc, [1], np.zeros((1, n_states)), axis=0)
-print(f"Cc: {Cc.shape}")
-print(f"Cc:\n{Cc}")
-print(f"C: {C.shape}")
-print(f"Kf: {Kf}, Kr: {Kr}")
 Dc = np.hstack([
-    np.zeros((2, n_outputs)),  # LQG controller D matrix, +1 to zero out tau2
+    np.zeros((2, n_outputs)),  # LQG controller D matrix, zero out tau2
     -Cc1,  # Augmented for the command "input"
-    # Cc,  # Augmented for the equilibrium offset
-    # np.zeros((2, n_outputs)),  # Augmented for the equilibrium offset
 ])  # LQG controller D matrix augmented
-print(f"Ac: {Ac.shape}, Bc: {Bc.shape}, Cc: {Cc.shape}, Dc: {Dc.shape}")
-print(f"Cc:\n{Cc}")
-print(f"Dc:\n{Dc}")
 sysc = control.ss(Ac, Bc, Cc, Dc, name='sysc')  # LQG controller system
-sysc.set_inputs(n_outputs+n_states, prefix='yre')  # Aug for command and eq off
-sysc.set_outputs(2, prefix='u')  # Control output
+sysc.set_inputs(n_outputs+n_states, prefix='yre')
+sysc.set_outputs(2, prefix='u')  # Control output (i.e., tau1, tau2)
 sysc.set_states(2*n_states, prefix='x_hat')  # Observer state
-
 print(sysc)
+
 #%% [markdown]
 # Now create a `control.InputOutputSystem` object for the nonlinear plant.
 # Before we can do that, we need to define a plant function that can incorporate disturbances.
@@ -649,7 +674,7 @@ print(sysc)
 def rotary_inverted_pendulum_disturbed(t, x, v, params):
     """Rotary inverted pendulum system dynamics with disturbances
     
-    Input vector v = [tau1, tau2, w_d1, w_d2, w_d3, w_d4, w_n1, w_n2].
+    Input vector v = [u, w_d, w_n].
     State vector x = [theta1, theta2, theta1_dot, theta2_dot].
     """
 
@@ -679,7 +704,9 @@ def output_function_noised(t, x, v, params):
     Output function for the rotary inverted pendulum system with
     measurement noise.
     """
+    
     n_noises = n_outputs  # Number of measurement noise inputs
+    # TODO - Should be passing C and D as arguments
     y = C @ x + D @ v[0:n_inputs] + v[-n_noises:]
     return y
 
@@ -696,16 +723,9 @@ sys_plant = control.NonlinearIOSystem(
 sys_plant.set_inputs(2 + n_disturbances + n_noises, prefix='v')  # Augmented input
 sys_plant.set_states(n_states, prefix='x')  # State
 sys_plant.set_outputs(n_outputs, prefix='y')  # Output
-
 print(sys_plant)
 
 #%% [markdown]
-# The LQG controller system has states relative to the equilibrium.
-# Therefore, we must subtract out the equilibrium states from the plant states before connecting the systems.
-# We can do this by summing an additional input to the closed-loop system that specifies the equilibrium state, then subtracting it out with a summing junction into the LQG controller.
-
-#%%
-# ...
 # Now we can connect the LQG controller to the nonlinear plant using the `control.interconnect()` function as follows:
 
 #%%
@@ -720,20 +740,18 @@ sys_cl = control.interconnect(
     ],  # Other internal connections are connected by name
     inplist=[
         f'sysc.yre[{n_outputs}:]', # xc
-        f'sys_plant.v[{2}:]',  # [wd, wn]
+        f'sys_plant.v[2:]',  # [wd, wn]
     ],  # External inputs
     inputs=n_states + n_disturbances + n_noises,
     outputs=cl_outputs,  # External outputs
     name='sys_cl'
 )
-
 print(sys_cl)
-print(sys_cl.connection_table())
 
 #%% [markdown]
 # ## Simulation with LQG Control
 #
-# Define the simulation function for the LQG-controlled system using the `control.forced_response()` function:
+# Simulate the closed-loop, LQG-controlled system using the `control.forced_response()` function:
 
 #%%
 t_sim = np.linspace(0, 3, 1000)  # Simulation time
@@ -746,17 +764,14 @@ command_inputs = np.vstack([
     np.zeros_like(t_sim),  # theta1_dot command
     np.zeros_like(t_sim)  # theta2_dot command
 ])  # Command inputs in original coordinates
-command_inputs = command_inputs - np.atleast_2d(xe).T  # Command inputs in linearized coordinates
-disturbance_inputs = 5e-3*np.random.randn(n_states, len(t_sim))  # Disturbances
-noise_inputs = stdn*np.random.randn(n_noises, len(t_sim))  # Measurement noise
-# disturbance_inputs = 0*np.random.randn(n_states, len(t_sim))  # Disturbances
-# noise_inputs = 0*np.random.randn(n_noises, len(t_sim))  # Measurement noise
+command_inputs = command_inputs - np.atleast_2d(xe).T  # Lin. coord's
+disturbance_inputs = 5e-3*np.random.randn(n_states, len(t_sim))
+noise_inputs = stdn*np.random.randn(n_noises, len(t_sim))
 all_inputs = np.vstack([
     command_inputs, 
     disturbance_inputs, 
     noise_inputs
 ])  # All inputs
-print(f"all_inputs: {all_inputs.shape}")
 lqr_response = control.forced_response(
     sys_cl,
     T=t_sim,
@@ -766,7 +781,7 @@ lqr_response = control.forced_response(
 y = lqr_response.outputs
 x = lqr_response.states
 x_hat_prime = x[n_states:2*n_states]  # Observer states
-x_hat = x_hat_prime + np.atleast_2d(xe).T  # Observer states in original coordinates
+x_hat = x_hat_prime + np.atleast_2d(xe).T  # In original coordinates
 
 #%% [markdown]
 # Plot the response of the system states and control inputs:
@@ -815,4 +830,3 @@ plt.draw()
 #%%
 anim = animate_rotary_pendulum(t_sim, x, params, track_theta2=False)
 plt.show()
-# anim.save('lqg_control.gif', fps=30)
