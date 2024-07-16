@@ -633,7 +633,7 @@ Q = np.diag([
     1,  # theta2 rate error cost
 ])  # State error cost matrix
 R = np.diag([
-    1e0,  # tau1 cost
+    1,  # tau1 cost
 ])  # Control effort cost matrix
 sys_lin = control.ss(A, B, C, D)  # Ignore augmented states for now
 Kr, S, E = control.lqr(sys_lin, Q, R)
@@ -669,7 +669,7 @@ Dc = np.hstack([
     -Cc1,  # Augmented for the command "input"
 ])  # LQG controller D matrix augmented
 sysc = control.ss(Ac, Bc, Cc, Dc, name='sysc')  # LQG controller system
-sysc.set_inputs(n_outputs+n_states, prefix='yre')
+sysc.set_inputs(n_outputs+n_states, prefix='yr')
 sysc.set_outputs(2, prefix='u')  # Control output (i.e., tau1, tau2)
 sysc.set_states(2*n_states, prefix='x_hat')  # Observer state
 print(sysc)
@@ -745,10 +745,10 @@ sys_cl = control.interconnect(
     syslist=[sys_plant, sysc],
     connections=[
         [f'sys_plant.v[0:2]', 'sysc.u'],  # Connect plant input
-        [f'sysc.yre[0:{n_outputs}]', 'sys_plant.y'],  # Connect control input
+        [f'sysc.yr[0:{n_outputs}]', 'sys_plant.y'],  # Connect control input
     ],  # Other internal connections are connected by name
     inplist=[
-        f'sysc.yre[{n_outputs}:]', # xc
+        f'sysc.yr[{n_outputs}:]', # xc
         f'sys_plant.v[2:]',  # [wd, wn]
     ],  # External inputs
     inputs=n_states + n_disturbances + n_noises,
@@ -763,10 +763,10 @@ print(sys_cl)
 # Simulate the closed-loop, LQG-controlled system using the `control.forced_response()` function:
 
 #%%
-t_sim = np.linspace(0, 3, 1000)  # Simulation time
+t_sim = np.linspace(0, 10, 1000)  # Simulation time
 xe = np.array([0, np.pi, 0, 0])  # Equilibrium state
 x0 = xe  # Initial state
-x0_hat_prime = np.array([0, 0, 0, 0])  # Initial observer state
+x0_hat_prime = x0 - xe  # Initial observer state
 command_inputs = np.vstack([
     0.4*np.ones_like(t_sim),  # theta1 command
     np.pi*np.ones_like(t_sim),  # theta2 command
@@ -798,7 +798,7 @@ x_hat = x_hat_prime + np.atleast_2d(xe).T  # In original coordinates
 #%%
 fig, ax = plt.subplots(2, 1, figsize=(6, 6), sharex=True)
 for i, label in enumerate(state_labels[0:2]):
-    ax[0].plot(t_sim, command_inputs[i], f"k{['--',':'][i]}", label=f'{label} command')
+    ax[0].plot(t_sim, command_inputs[i] + xe[i], f"k{['--',':'][i]}", label=f'{label} command')
     ax[0].plot(t_sim, x[i], label=label)  # theta1, theta2
 ax[0].set_ylabel('Angle (rad)')
 ax[0].legend()
