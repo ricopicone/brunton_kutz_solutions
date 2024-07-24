@@ -61,9 +61,10 @@ class MPCSimulation:
         self.n_horizon = n_horizon
         self.n_update = n_update
         self.t_horizon = np.linspace(0, T_horizon, n_horizon)
-        self.t_update = np.linspace(0, T_update, n_update)
+        self.t_update = np.linspace(0, T_update, n_update+1)
+        self.t_sim = np.linspace(0, T_update * n_updates, n_update * n_updates + 1)
         if xd is None:
-            xd = np.zeros((sys.nstates, n_update))  # Regulate to zero
+            xd = np.zeros((sys.nstates, n_update * n_updates + 1))  # Regulate to zero
         self.xd = xd
         self.results = {
             "predictions": {
@@ -76,29 +77,29 @@ class MPCSimulation:
             },
             "simulation": {
                 "states": np.zeros(
-                    (self.sys.nstates, self.n_update * self.n_updates)
+                    (self.sys.nstates, self.n_update * self.n_updates + 1)
                 ), 
                 "inputs": np.zeros(
-                    (self.sys.ninputs, self.n_update * self.n_updates)
+                    (self.sys.ninputs, self.n_update * self.n_updates + 1)
                 )
             }
         }  # Store results here
     
-    def _predict(self, xd, T_horizon):
-        return self.predictor(xd, T_horizon)
+    def _predict(self, xd, t_horizon):
+        return self.predictor(xd, t_horizon)
     
     def _simulate_update_period(self, xd, period):
         """Simulate over the update period
         
         Implement feedforward control.
         """
-        prediction = self._predict(xd, self.T_horizon)
-        self.results["predictions"]["states"][:, :, period] = prediction.outputs
-        self.results["predictions"]["inputs"][:, :, period] = prediction.inputs
-        ud = prediction.inputs[:self.n_update]
-        xd = prediction.outputs[:self.n_update]
+        xp, up = self._predict(xd, self.t_horizon)
+        self.results["predictions"]["states"][:, :, period] = xp
+        self.results["predictions"]["inputs"][:, :, period] = up
+        xd = xp[:, :self.n_update+1]
+        ud = up[:, :self.n_update+1]
         sim = control.input_output_response(
-            self.sys, T=self.t_update, U=ud, x0 = xd[0]
+            self.sys, T=self.t_update, U=ud, X0=xd[:, 0]
         )
         return sim
     
@@ -106,16 +107,75 @@ class MPCSimulation:
         for i in range(self.n_updates):
             print(f"Simulating update {i+1}/{self.n_updates}")
             j = i*self.n_update
-            if i == 0:
-                xd_period = self.xd[:, :self.n_update]
-            else:
-                xd_period = self.xd[:, j:j+self.n_update]
+            xd_period = self.xd[:, j:j+self.n_update+1]
+            if i != 0:
                 xd_period[:, 0] = \
-                    self.results["simulation"]["states"][:, j-1]  
-                        # Use last state from previous period
+                    self.results["simulation"]["states"][:, j]  
+                        # Start with last state from previous period
             sim = self._simulate_update_period(xd_period, i)
-            self.results["simulation"]["states"][:, j:j+self.n_update] = sim.outputs
-            self.results["simulation"]["inputs"][:, j:j+self.n_update] = sim.inputs
+
+            self.results["simulation"]["states"][:, j:j+self.n_update+1] = sim.outputs
+            self.results["simulation"]["inputs"][:, j:j+self.n_update+1] = sim.inputs
+    
+    def plot_results(self):
+        fig, ax = plt.subplots(2, 1, sharex=True)
+        # Plot desired states:
+        if self.xd is not None:
+            for i in range(self.sys.nstates):
+                ax[0].plot(
+                    self.t_sim, 
+                    self.xd[i, :],
+                    'r-.', linewidth=1
+                )
+        # Plot states:
+        ## Plot predicted states:
+        for i in range(self.sys.nstates):
+            for j in range(self.n_updates):
+                ax[0].plot(
+                    j*self.T_update, 
+                    self.results["predictions"]["states"][i, 0, j],
+                    'k.'
+                )  # Initial state
+                ax[0].plot(
+                    self.t_horizon + j*self.T_update, 
+                    self.results["predictions"]["states"][i, :, j],
+                    'k--', linewidth=0.5
+                )  # Predicted state
+        ## Plot simulated states:
+        for i in range(self.sys.nstates):
+            ax[0].plot(
+                self.t_sim, 
+                self.results["simulation"]["states"][i],
+                label=f"State {i}"
+            )
+        ax[0].set_ylabel('State')
+        ax[0].legend()
+        # Plot inputs:
+        ## Plot predicted inputs:
+        for i in range(self.sys.ninputs):
+            for j in range(self.n_updates):
+                ax[1].plot(
+                    j*self.T_update, 
+                    self.results["predictions"]["inputs"][i, 0, j],
+                    'k.'
+                )
+                ax[1].plot(
+                    self.t_horizon + j*self.T_update, 
+                    self.results["predictions"]["inputs"][i, :, j],
+                    'k--', linewidth=0.5
+                )
+        ## Plot simulated inputs:
+        for i in range(self.sys.ninputs):
+            ax[1].plot(
+                self.t_sim, 
+                self.results["simulation"]["inputs"][i],
+                label=f"Input {i}"
+            )
+        ax[1].set_ylabel('Input')
+        ax[1].set_xlabel('Time')
+        ax[1].legend()
+        plt.draw()
+        return fig, ax
 
 #%% [markdown]
 # The `predictor()` function is quite general here.
@@ -148,7 +208,8 @@ def lorenz_forced(t, x_, u, params={}):
 
 #%%
 lorenz_forced_sys = control.NonlinearIOSystem(
-    lorenz_forced, None, inputs=1, states=3
+    lorenz_forced, None, inputs=["u"], states=["x", "y", "z"],
+    name="lorenz_forced_sys"
 )
 
 #%% [markdown]
@@ -213,7 +274,6 @@ def DMDc(X_prime, Omega, p, r):
     n = X_prime.shape[0]  # Number of states
     U_tilde, Sigma_tilde, VT_tilde = np.linalg.svd(Omega, full_matrices=0)
     Sigma_tilde = np.diag(Sigma_tilde[:p])  # Input truncatation
-    print(f"VT_tilde.shape: {VT_tilde.shape}")
     VT_tilde = VT_tilde[:p, :]  # Input truncation
     U_tilde = U_tilde[:, :p]  # Input truncation
     U_tilde1 = U_tilde[:n, :]
@@ -224,7 +284,6 @@ def DMDc(X_prime, Omega, p, r):
     VT_hat = VT_hat[:r, :]  # Output truncation
     U_hat = U_hat[:, :r]  # Output truncation
     # Step 4
-    print(f"U_hat.T.shape: {U_hat.T.shape}, X_prime.shape: {X_prime.shape}, VT_tilde.T.shape: {VT_tilde.T.shape}, Sigma_tilde.shape: {Sigma_tilde.shape}, U_tilde1.T.shape: {U_tilde1.T.shape}, U_hat.shape: {U_hat.shape}")
     A_tilde = U_hat.T @ X_prime @ VT_tilde.T @ np.linalg.inv(Sigma_tilde) @ U_tilde1.T @ U_hat
     B_tilde = U_hat.T @ X_prime @ VT_tilde.T @ np.linalg.inv(Sigma_tilde) @ U_tilde2.T
     # Step 5
@@ -251,8 +310,6 @@ print(f"X_prime.shape: {X_prime.shape}, Omega.shape: {Omega.shape}")
 p = 24  # Number of input modes
 r = 16  # Number of output modes
 Phi, Lambda, A_tilde, B_tilde = DMDc(X_prime, Omega=Omega, p=p, r=r)
-print(f"Phi:\n{Phi}")
-print(f"Lambda:\n{Lambda}")
 print(f"A_tilde:\n{A_tilde}")
 print(f"B_tilde:\n{B_tilde}")
 
@@ -312,7 +369,7 @@ ax[2].plot(t_test, x_DMDc_pred[2], label='z_DMDc_pred')
 ax[2].set_ylabel('z')
 ax[2].set_xlabel('Time')
 ax[2].legend()
-plt.show()
+plt.draw()
 
 #%% [markdown]
 # The results are so bad because the DMDc model is linear and the Lorenz system is highly nonlinear.
@@ -321,17 +378,14 @@ plt.show()
 # Nonetheless, define the DMDc predictor function:
 
 #%%
-def DMDc_predictor(x0, t_horizon, dt, A_tilde, B_tilde, xf=None):
+def DMDc_predictor(xd, t_horizon, sys=None):
     """Predictor for DMDc model using optimal control"""
-    if xf is None:
-        xf = x0
-    sys = control.ss(A_tilde, B_tilde, np.eye(A_tilde.shape[0]), 0, dt=dt)
     Q = np.eye(A_tilde.shape[0])
     R = np.eye(B_tilde.shape[1])
-    cost = control.optimal.quadratic_cost(sys, Q, R, x0=xf)
-    terminal_cost = control.optimal.quadratic_cost(sys, 5*Q, 0*R, x0=xf)
+    cost = control.optimal.quadratic_cost(sys, Q, R, x0=xd[:, -1])
+    terminal_cost = control.optimal.quadratic_cost(sys, 5*Q, 0*R, x0=xd[:, -1])
     x, u = predict_trajectory(
-        sys, x0, t_horizon, cost=cost, terminal_cost=terminal_cost
+        sys, xd[:, 0], t_horizon, cost=cost, terminal_cost=terminal_cost
     )
     return x, u
 
@@ -343,5 +397,34 @@ def DMDc_predictor(x0, t_horizon, dt, A_tilde, B_tilde, xf=None):
 # Define the SINDy model:
 
 #%%
-sindy = pysindy.SINDy()
-sindy.fit(x_train.T, u=u_train, t=t_train)
+# sindy = pysindy.SINDy()
+# sindy.fit(x_train.T, u=u_train, t=t_train)
+
+#%% [markdown]
+# DMCc MPC simulation:
+
+#%%
+T_horizon = dt * 30
+T_update = dt * 10
+n_horizon = int(np.floor(T_horizon/dt)) + 1  # Must match DMDc model timebase
+n_update = int(np.floor(T_update/dt)) + 1
+n_updates = 66
+xeq = np.array([-np.sqrt(72), -np.sqrt(72), 27])
+print(f"xeq: {xeq}")
+command = np.outer(xeq, np.ones(n_update * n_updates + 1))
+command[:, 0] = x_test[:, 0]  # Initial state
+mpc_DMDc = MPCSimulation(
+    sys=lorenz_forced_sys,
+    inplist=['u'],
+    outlist=['lorenz_forced_sys.x', 'lorenz_forced_sys.y', 'lorenz_forced_sys.z'],
+    predictor=lambda x0, t_horizon: DMDc_predictor(x0, t_horizon, sys=sys_DMDc),
+    T_horizon=T_horizon, 
+    T_update=T_update,
+    n_updates=n_updates,
+    n_horizon=n_horizon, 
+    n_update=n_update, 
+    xd=command
+)
+results_mpc_DMDc = mpc_DMDc.simulate()
+mpc_DMDc.plot_results()
+plt.show()
