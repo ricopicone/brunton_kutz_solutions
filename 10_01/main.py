@@ -16,7 +16,7 @@ import pysindy
 
 #%%
 run_lorenz = True
-run_DMDc = False
+run_DMDc = True
 run_SINDYc = False
 run_NN = False
 
@@ -425,11 +425,11 @@ def DMDc_predictor(xd, t_horizon, sys=None):
 # Again, we don't expect good results, but we can at least see how it performs.
 
 #%%
-T_horizon = dt * 30
-T_update = dt * 10
+T_horizon = dt * 50
+T_update = dt * 20
 n_horizon = int(np.floor(T_horizon/dt)) + 1  # Must match DMDc model timebase
 n_update = int(np.floor(T_update/dt)) + 1
-n_updates = 10
+n_updates = 50
 xeq = np.array([-np.sqrt(72), -np.sqrt(72), 27])
 print(f"xeq: {xeq}")
 command = np.outer(xeq, np.ones(n_update * n_updates + 1))
@@ -462,8 +462,64 @@ if run_DMDc:
 # Define the SINDy model:
 
 #%%
-# sindy = pysindy.SINDy()
-# sindy.fit(x_train.T, u=u_train, t=t_train)
+sindy_model = pysindy.SINDy(feature_names=["x", "y", "z"])
+sindy_model.fit(x_train.T, t=dt, multiple_trajectories=False)
+print("Dynamics identified by pySINDy:")
+sindy_model.print()
+
+#%% [markdown]
+# The SINDy model `sindy_model` has the `simulate()` method that can be used to predict the evolution of the system.
+# First, let's predict the trajectory on the test data:
+
+#%%
+x_SINDy_pred = sindy_model.simulate(x_test[:,0], t_test)
+
+#%% [markdown]
+# Plot the simulated and predicted trajectory with the test data:
+
+#%%
+fig, ax = plt.subplots(3, 1, sharex=True)
+ax[0].plot(t_test, x_test[0], label='x_test')
+ax[0].plot(t_test, x_SINDy_pred[:, 0], label='x_SINDy_pred')
+ax[0].set_ylabel('x')
+ax[0].legend()
+ax[1].plot(t_test, x_test[1], label='y_test')
+ax[1].plot(t_test, x_SINDy_pred[:, 1], label='y_SINDy_pred')
+ax[1].set_ylabel('y')
+ax[1].legend()
+ax[2].plot(t_test, x_test[2], label='z_test')
+ax[2].plot(t_test, x_SINDy_pred[:, 2], label='z_SINDy_pred')
+ax[2].set_ylabel('z')
+ax[2].set_xlabel('Time')
+ax[2].legend()
+plt.draw()
+
+#%% [markdown]
+# So the SINDy model is not perfect, but it is much better than the DMDc model.
+# For a few seconds, the model is quite good.
+# With more training data, the model would likely improve.
+#
+# We can use the model to write a predictor function for the SINDy model.
+# The optimal control approach requires we create a `control.NonlinearIOSystem` object from the SINDy model.
+
+#%%
+print(sindy_model.coefficients())
+print(sindy_model.get_feature_names())
+
+#%% [markdown]
+# Define the SINDy predictor function:
+
+#%%
+def SINDy_predictor(xd, t_horizon, sys=None):
+    """Predictor for SINDy model using optimal control"""
+    Q = np.eye(sys.nstates)
+    R = 0.01 * np.eye(sys.ninputs)
+    cost = control.optimal.quadratic_cost(sys, Q, R, x0=xd[:, -1])
+    terminal_cost = control.optimal.quadratic_cost(sys, 5*Q, 0*R, x0=xd[:, -1])
+    x, u = predict_trajectory(
+        sys, xd[:, 0], t_horizon, cost=cost, terminal_cost=terminal_cost
+    )
+    return x, u
 
 #%%
 plt.show()
