@@ -8,7 +8,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 import control
 import control.optimal as opt
+import pydmd
 import pysindy
+
+#%% [markdown]
+# Set up some flags for running the MPC simulations:
+
+#%%
+run_lorenz = True
+run_DMDc = False
+run_SINDYc = False
+run_NN = False
 
 #%% [markdown]
 # ## Model Predictive Control
@@ -180,13 +190,12 @@ class MPCSimulation:
 #%% [markdown]
 # The `predictor()` function is quite general here.
 # We will write three different versions, one for each of the DMDc, SINDYc, and NN Models.
+
+#%% [markdown]
+# ## The Lorenz System and Testing the MPC Simulation
 #
-# ## DMDc, SINDYc, and NN Model Predictors
-#
-# ### Generating Training and Testing Data
-#
-# We will first generate some training and testing data for the predictors.
-# Begin by defining the forced Lorenz system model:
+# We will use the Lorenz system as the plant model.
+# Define the Lorenz system dynamics:
 
 #%%
 def lorenz_forced(t, x_, u, params={}):
@@ -203,7 +212,7 @@ def lorenz_forced(t, x_, u, params={}):
     return [dx, dy, dz]
 
 #%% [markdown]
-# Because we're already using the `control` package, we can use the `input_output_response()` function to simulate the forced Lorenz system.
+# Because we're using the `control` package, we can use the `input_output_response()` function to simulate the forced Lorenz system.
 # Create a `NonlinearIOSystem` object for the forced Lorenz system:
 
 #%%
@@ -213,7 +222,95 @@ lorenz_forced_sys = control.NonlinearIOSystem(
 )
 
 #%% [markdown]
-# Now generate the training and testing data:
+# We would like to predict a trajectory, state and input, over a time horizon.
+# For all three models (and the exact model used here), this will involve predicting the future states given the desired state trajectory.
+# The challenge is that we don't know the future inputs.
+# There are multiple ways to approach this.
+# The first is to assume that the future inputs are the same as the current input.
+# This works for short update periods relative to the dynamics of the system.
+# The second approach is to solve an optimal control problem to determine the future inputs.
+# This will give better results but is more computationally expensive.
+# We will write a function that can handle both cases.
+
+#%%
+def predict_trajectory(sys, x0, t_horizon, u0=None, cost=None, terminal_cost=None):
+    if cost is None:  # Constant input
+        if u0 is None:
+            u0 = np.zeros_like(t_horizon)  # Zero input
+        u = u0 * np.ones_like(t_horizon)  # Constant input
+        x = control.input_output_response(
+            sys, T=t_horizon, U=u, x0=x0
+        ).states
+    else:  # Solve optimal control problem
+        ocp = opt.OptimalControlProblem(
+            sys, t_horizon, cost, terminal_cost=terminal_cost
+        )
+        res = ocp.compute_trajectory(x0, print_summary=False)
+        u = res.inputs
+        x = res.states
+    return x, u
+
+#%% [markdown]
+# This isn't specific enough to be used as a predictor function, but it can be used to write a predictor function.
+# We will write a predictor function that uses the Lorenz system model to predict future states.
+# We will use the optimal control approach to determine the future inputs.
+
+#%%
+def lorenz_predictor(xd, t_horizon, sys):
+    """Predictor for Lorenz system using optimal control"""
+    Q = np.eye(sys.nstates)
+    R = 0.01 * np.eye(sys.ninputs)
+    cost = control.optimal.quadratic_cost(sys, Q, R, x0=xd[:, -1])
+    terminal_cost = control.optimal.quadratic_cost(
+        sys, 5*Q, 0*R, x0=xd[:, -1]
+    )  # Penalize terminal state more
+    x, u = predict_trajectory(
+        sys, xd[:, 0], t_horizon, cost=cost, terminal_cost=terminal_cost
+    )
+    return x, u
+
+#%% [markdown]
+# We can now test the MPC simulation class using the Lorenz system model to predict future inputs.
+# We expect the results to be good because we're using the exact model.
+
+#%%
+dt_lorenz = 1e-3  # Time step
+T_horizon = dt_lorenz * 50
+T_update = dt_lorenz * 20
+n_horizon = int(np.floor(T_horizon/dt_lorenz)) + 1
+n_update = int(np.floor(T_update/dt_lorenz)) + 1
+n_updates = 50
+xeq = np.array([-np.sqrt(72), -np.sqrt(72), 27])
+print(f"xeq: {xeq}")
+command = np.outer(xeq, np.ones(n_update * n_updates + 1))
+command[:, 0] = np.array([0, 0, 0])  # Initial state
+if run_lorenz:
+    mpc_lorenz = MPCSimulation(
+        sys=lorenz_forced_sys,
+        inplist=['u'],
+        outlist=['lorenz_forced_sys.x', 'lorenz_forced_sys.y', 'lorenz_forced_sys.z'],
+        predictor=lambda x0, t_horizon: lorenz_predictor(x0, t_horizon, sys=lorenz_forced_sys),
+        T_horizon=T_horizon, 
+        T_update=T_update,
+        n_updates=n_updates,
+        n_horizon=n_horizon, 
+        n_update=n_update, 
+        xd=command
+    )
+    results_mpc_lorenz = mpc_lorenz.simulate()
+    mpc_lorenz.plot_results()
+    plt.draw()
+
+#%% [markdown]
+# The results are good.
+# Note that if a global optimal control problem is solved and used as the `xd` commanded trajectory, the results will be better.
+# Here we have used a constant commanded trajectory, which is not a feasible trajectory for the Lorenz system.
+# The deviations of the predictor from the actual response are due to the Lorenz system being chaotic, numerical optimization limitations, and the finite time horizon over which the optimal control problem is solved.
+
+# ## Generating Training and Testing Data
+#
+# Now we generate some training and testing data for the predictors.
+# Generate the training and testing data as follows:
 
 #%%
 dt_data = 1e-3  # Time step
@@ -257,90 +354,23 @@ x_train = x_data[:, :n_train]
 x_test = x_data[:, n_train:]
 
 #%% [markdown]
-# ### Dynamic Mode Decomposition (DMD) Predictor
+# ## Dynamic Mode Decomposition with Control (DMDc) Model
 #
-# Define the exact DMDc function from Brunton and Kutz (2022) section 7.2 and modified based on section 10.2:
-
-#%%
-def DMDc(X_prime, Omega, p, r):
-    """Dynamic Mode Decomposition with Control
-    
-    Based on Proctor, Brunton, and Kutz (2016) section 3.4
-    (assuming we don't know the B matrix)
-    G = [A B], Omega = [X Upsilon].T, Upsilon = [u1 u2 ... un], 
-    p = input truncation value, r = output truncation value
-    """
-    # Step 2
-    n = X_prime.shape[0]  # Number of states
-    U_tilde, Sigma_tilde, VT_tilde = np.linalg.svd(Omega, full_matrices=0)
-    Sigma_tilde = np.diag(Sigma_tilde[:p])  # Input truncatation
-    VT_tilde = VT_tilde[:p, :]  # Input truncation
-    U_tilde = U_tilde[:, :p]  # Input truncation
-    U_tilde1 = U_tilde[:n, :]
-    U_tilde2 = U_tilde[n:, :]
-    # Step 3
-    U_hat, Sigma_hat, VT_hat = np.linalg.svd(X_prime, full_matrices=0)
-    Sigma_hat = np.diag(Sigma_hat[:r])  # Output truncation
-    VT_hat = VT_hat[:r, :]  # Output truncation
-    U_hat = U_hat[:, :r]  # Output truncation
-    # Step 4
-    A_tilde = U_hat.T @ X_prime @ VT_tilde.T @ np.linalg.inv(Sigma_tilde) @ U_tilde1.T @ U_hat
-    B_tilde = U_hat.T @ X_prime @ VT_tilde.T @ np.linalg.inv(Sigma_tilde) @ U_tilde2.T
-    # Step 5
-    Lambda, W = np.linalg.eig(A_tilde)
-    Lambda = np.diag(Lambda)
-    # Step 6
-    Phi = X_prime @ VT_tilde.T @ np.linalg.inv(Sigma_tilde) @ U_tilde1.T @ U_hat @ W
-    return Phi, Lambda, A_tilde, B_tilde
-
-#%% [markdown]
-# Construct the data matrices $X'$ and $G$:
-
-#%%
-X_prime = x_train[:, 1:]
-X = x_train[:, :-1]
-Upsilon = np.atleast_2d([u_train[:-1]])
-Omega = np.vstack((X, Upsilon))
-print(f"X_prime.shape: {X_prime.shape}, Omega.shape: {Omega.shape}")
-
-#%% [markdown]
+# We could define the exact DMDc function from Brunton and Kutz (2022) section 7.2 and modified based on section 10.2.
+# However, it is more convenient to use the PyDMD package to compute the DMDc model.
+#
 # Compute the DMDc model:
 
 #%%
-p = 24  # Number of input modes
-r = 16  # Number of output modes
-Phi, Lambda, A_tilde, B_tilde = DMDc(X_prime, Omega=Omega, p=p, r=r)
-print(f"A_tilde:\n{A_tilde}")
-print(f"B_tilde:\n{B_tilde}")
-
-#%% [markdown]
-# We would like to predict a trajectory, state and input, over a time horizon.
-# For all three models, this will involve predicting the future states given the desired state trajectory.
-# The challenge is that we don't know the future inputs.
-# There are multiple ways to approach this.
-# The first is to assume that the future inputs are the same as the current input.
-# This works for short update periods relative to the dynamics of the system.
-# The second approach is to solve an optimal control problem to determine the future inputs.
-# This will give better results but is more computationally expensive.
-# We will write a function that can handle both cases.
-
-#%%
-def predict_trajectory(sys, x0, t_horizon, u0=None, cost=None, terminal_cost=None):
-    if cost is None:  # Constant input
-        if u0 is None:
-            u0 = np.zeros_like(t_horizon)  # Zero input
-        u = u0 * np.ones_like(t_horizon)  # Constant input
-        x = control.input_output_response(
-            sys, T=t_horizon, U=u, x0=x0
-        ).states
-    else:  # Solve optimal control problem
-        ocp = opt.OptimalControlProblem(
-            sys, t_horizon, cost, terminal_cost=terminal_cost
-        )
-        res = ocp.compute_trajectory(x0, print_summary=False)
-        u = res.inputs
-        x = res.states
-    return x, u
+dmdc = pydmd.DMDc()
+dmdc.fit(X=x_train, I=u_train[:-1])
+Phi_pydmd = dmdc.modes
+Lambda_pydmd = np.diag(dmdc.eigs)
+b_pydmd = dmdc.amplitudes
+A_pydmd = Phi_pydmd @ Lambda_pydmd @ np.linalg.pinv(Phi_pydmd)
+B_pydmd = dmdc.B
+print(f"A_pydmd:\n{A_pydmd}")
+print(f"B_pydmd:\n{B_pydmd}")
 
 #%% [markdown]
 # Predict the trajectory on the test data:
@@ -348,7 +378,7 @@ def predict_trajectory(sys, x0, t_horizon, u0=None, cost=None, terminal_cost=Non
 #%%
 dt = t_train[1] - t_train[0]
 x0 = x_test[:, 0]
-sys_DMDc = control.ss(A_tilde, B_tilde, np.eye(A_tilde.shape[0]), 0, dt=dt)
+sys_DMDc = control.ss(A_pydmd, B_pydmd, np.eye(A_pydmd.shape[0]), 0, dt=dt)
 x_DMDc_pred = control.forced_response(sys_DMDc, T=t_test, U=u_test, X0=x0).states
 
 #%% [markdown]
@@ -380,8 +410,8 @@ plt.draw()
 #%%
 def DMDc_predictor(xd, t_horizon, sys=None):
     """Predictor for DMDc model using optimal control"""
-    Q = np.eye(A_tilde.shape[0])
-    R = np.eye(B_tilde.shape[1])
+    Q = np.eye(sys.nstates)
+    R = 0.01 * np.eye(sys.ninputs)
     cost = control.optimal.quadratic_cost(sys, Q, R, x0=xd[:, -1])
     terminal_cost = control.optimal.quadratic_cost(sys, 5*Q, 0*R, x0=xd[:, -1])
     x, u = predict_trajectory(
@@ -390,9 +420,44 @@ def DMDc_predictor(xd, t_horizon, sys=None):
     return x, u
 
 #%% [markdown]
-# We will wait to test the DMDc predictor in MPC simulation until we have defined the other predictors.
+# Now that we have our DMCc predictor, we can try it in the MPC simulation.
+# We could use feedback control as well, which would improve the results, but using feedforward only allows us to get a better comparison among the predictors.
+# Again, we don't expect good results, but we can at least see how it performs.
+
+#%%
+T_horizon = dt * 30
+T_update = dt * 10
+n_horizon = int(np.floor(T_horizon/dt)) + 1  # Must match DMDc model timebase
+n_update = int(np.floor(T_update/dt)) + 1
+n_updates = 10
+xeq = np.array([-np.sqrt(72), -np.sqrt(72), 27])
+print(f"xeq: {xeq}")
+command = np.outer(xeq, np.ones(n_update * n_updates + 1))
+command[:, 0] = x_test[:, 0]  # Initial state
+if run_DMDc:
+    mpc_DMDc = MPCSimulation(
+        sys=lorenz_forced_sys,
+        inplist=['u'],
+        outlist=['lorenz_forced_sys.x', 'lorenz_forced_sys.y', 'lorenz_forced_sys.z'],
+        predictor=lambda x0, t_horizon: DMDc_predictor(x0, t_horizon, sys=sys_DMDc),
+        T_horizon=T_horizon, 
+        T_update=T_update,
+        n_updates=n_updates,
+        n_horizon=n_horizon, 
+        n_update=n_update, 
+        xd=command
+    )
+    results_mpc_DMDc = mpc_DMDc.simulate()
+    mpc_DMDc.plot_results()
+    plt.show()
+
+#%% [markdown]
+# As expected, the DMDc model performs poorly.
+# An alternative DMDc approach for highly nonlinear systems is to use extended DMDc (EDMDc) with nonlinear measurements.
+# This is connected to the Koopman operator theory.
+# We will not pursue this here.
 #
-# ### Sparse Identification of Nonlinear Dynamics (SINDy) Predictor
+# ## Sparse Identification of Nonlinear Dynamics (SINDy) 
 # 
 # Define the SINDy model:
 
@@ -400,31 +465,5 @@ def DMDc_predictor(xd, t_horizon, sys=None):
 # sindy = pysindy.SINDy()
 # sindy.fit(x_train.T, u=u_train, t=t_train)
 
-#%% [markdown]
-# DMCc MPC simulation:
-
 #%%
-T_horizon = dt * 30
-T_update = dt * 10
-n_horizon = int(np.floor(T_horizon/dt)) + 1  # Must match DMDc model timebase
-n_update = int(np.floor(T_update/dt)) + 1
-n_updates = 66
-xeq = np.array([-np.sqrt(72), -np.sqrt(72), 27])
-print(f"xeq: {xeq}")
-command = np.outer(xeq, np.ones(n_update * n_updates + 1))
-command[:, 0] = x_test[:, 0]  # Initial state
-mpc_DMDc = MPCSimulation(
-    sys=lorenz_forced_sys,
-    inplist=['u'],
-    outlist=['lorenz_forced_sys.x', 'lorenz_forced_sys.y', 'lorenz_forced_sys.z'],
-    predictor=lambda x0, t_horizon: DMDc_predictor(x0, t_horizon, sys=sys_DMDc),
-    T_horizon=T_horizon, 
-    T_update=T_update,
-    n_updates=n_updates,
-    n_horizon=n_horizon, 
-    n_update=n_update, 
-    xd=command
-)
-results_mpc_DMDc = mpc_DMDc.simulate()
-mpc_DMDc.plot_results()
 plt.show()
