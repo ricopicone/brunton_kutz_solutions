@@ -6,19 +6,24 @@
 #%%
 import numpy as np
 import matplotlib.pyplot as plt
+import time
 import control
 import control.optimal as opt
 import pydmd
 import pysindy
 
 #%% [markdown]
-# Set up some flags for running the MPC simulations:
+# Set up some flags for running the MPC simulations and test predictions:
 
 #%%
-run_lorenz = True
-run_DMDc = True
-run_SINDYc = False
-run_NN = False
+control_lorenz = False
+control_DMDc = False
+control_SINDYc = True
+control_NN = False
+
+test_DMDc = False
+test_SINDYc = False
+test_NN = False
 
 #%% [markdown]
 # ## Model Predictive Control
@@ -115,7 +120,8 @@ class MPCSimulation:
     
     def simulate(self):
         for i in range(self.n_updates):
-            print(f"Simulating update {i+1}/{self.n_updates}")
+            print(f"Simulating update {i+1}/{self.n_updates} ... ", end="", flush=True)
+            tic = time.time()
             j = i*self.n_update
             xd_period = self.xd[:, j:j+self.n_update+1]
             if i != 0:
@@ -123,7 +129,8 @@ class MPCSimulation:
                     self.results["simulation"]["states"][:, j]  
                         # Start with last state from previous period
             sim = self._simulate_update_period(xd_period, i)
-
+            toc = time.time()
+            print(f"done in {toc-tic:.2f} s.")
             self.results["simulation"]["states"][:, j:j+self.n_update+1] = sim.outputs
             self.results["simulation"]["inputs"][:, j:j+self.n_update+1] = sim.inputs
     
@@ -284,7 +291,7 @@ xeq = np.array([-np.sqrt(72), -np.sqrt(72), 27])
 print(f"xeq: {xeq}")
 command = np.outer(xeq, np.ones(n_update * n_updates + 1))
 command[:, 0] = np.array([0, 0, 0])  # Initial state
-if run_lorenz:
+if control_lorenz:
     mpc_lorenz = MPCSimulation(
         sys=lorenz_forced_sys,
         inplist=['u'],
@@ -319,7 +326,7 @@ n_data = len(t_data)
 n_train = int(n_data/2)
 u_data_train = (2*np.sin(t_data[:n_train])
                 + np.sin(0.1*t_data[:n_train]))**2  # Input
-u_data_test = (5*np.sin(30*t_data[n_train:])**3)
+u_data_test = (5*np.sin(30*t_data[n_train:]))**3
 u_data = np.hstack((u_data_train, u_data_test))
 x_data = control.input_output_response(
     lorenz_forced_sys, T=t_data, U=u_data
@@ -376,30 +383,32 @@ print(f"B_pydmd:\n{B_pydmd}")
 # Predict the trajectory on the test data:
 
 #%%
-dt = t_train[1] - t_train[0]
-x0 = x_test[:, 0]
-sys_DMDc = control.ss(A_pydmd, B_pydmd, np.eye(A_pydmd.shape[0]), 0, dt=dt)
-x_DMDc_pred = control.forced_response(sys_DMDc, T=t_test, U=u_test, X0=x0).states
+if test_DMDc:
+    dt = t_train[1] - t_train[0]
+    x0 = x_test[:, 0]
+    sys_DMDc = control.ss(A_pydmd, B_pydmd, np.eye(A_pydmd.shape[0]), 0, dt=dt)
+    x_DMDc_pred = control.forced_response(sys_DMDc, T=t_test, U=u_test, X0=x0).states
 
 #%% [markdown]
 # Plot the predicted trajectory with the test data:
 
 #%%
-fig, ax = plt.subplots(3, 1, sharex=True)
-ax[0].plot(t_test, x_test[0], label='x_test')
-ax[0].plot(t_test, x_DMDc_pred[0], label='x_DMDc_pred')
-ax[0].set_ylabel('x')
-ax[0].legend()
-ax[1].plot(t_test, x_test[1], label='y_test')
-ax[1].plot(t_test, x_DMDc_pred[1], label='y_DMDc_pred')
-ax[1].set_ylabel('y')
-ax[1].legend()
-ax[2].plot(t_test, x_test[2], label='z_test')
-ax[2].plot(t_test, x_DMDc_pred[2], label='z_DMDc_pred')
-ax[2].set_ylabel('z')
-ax[2].set_xlabel('Time')
-ax[2].legend()
-plt.draw()
+if test_DMDc:
+    fig, ax = plt.subplots(3, 1, sharex=True)
+    ax[0].plot(t_test, x_test[0], label='x_test')
+    ax[0].plot(t_test, x_DMDc_pred[0], label='x_DMDc_pred')
+    ax[0].set_ylabel('x')
+    ax[0].legend()
+    ax[1].plot(t_test, x_test[1], label='y_test')
+    ax[1].plot(t_test, x_DMDc_pred[1], label='y_DMDc_pred')
+    ax[1].set_ylabel('y')
+    ax[1].legend()
+    ax[2].plot(t_test, x_test[2], label='z_test')
+    ax[2].plot(t_test, x_DMDc_pred[2], label='z_DMDc_pred')
+    ax[2].set_ylabel('z')
+    ax[2].set_xlabel('Time')
+    ax[2].legend()
+    plt.draw()
 
 #%% [markdown]
 # The results are so bad because the DMDc model is linear and the Lorenz system is highly nonlinear.
@@ -425,16 +434,16 @@ def DMDc_predictor(xd, t_horizon, sys=None):
 # Again, we don't expect good results, but we can at least see how it performs.
 
 #%%
-T_horizon = dt * 50
-T_update = dt * 20
-n_horizon = int(np.floor(T_horizon/dt)) + 1  # Must match DMDc model timebase
-n_update = int(np.floor(T_update/dt)) + 1
+T_horizon = dt_data * 50
+T_update = dt_data * 20
+n_horizon = int(np.floor(T_horizon/dt_data)) + 1  # Must match DMDc model timebase
+n_update = int(np.floor(T_update/dt_data)) + 1
 n_updates = 50
 xeq = np.array([-np.sqrt(72), -np.sqrt(72), 27])
 print(f"xeq: {xeq}")
 command = np.outer(xeq, np.ones(n_update * n_updates + 1))
 command[:, 0] = x_test[:, 0]  # Initial state
-if run_DMDc:
+if control_DMDc:
     mpc_DMDc = MPCSimulation(
         sys=lorenz_forced_sys,
         inplist=['u'],
@@ -462,37 +471,57 @@ if run_DMDc:
 # Define the SINDy model:
 
 #%%
-sindy_model = pysindy.SINDy(feature_names=["x", "y", "z"])
-sindy_model.fit(x_train.T, t=dt, multiple_trajectories=False)
+sindy_model = pysindy.SINDy(feature_names=["x", "y", "z", "u"])
+sindy_model.fit(x_train.T, t=dt_data, u=u_train, multiple_trajectories=False)
 print("Dynamics identified by pySINDy:")
 sindy_model.print()
+
+def extract_sindy_dynamics(sindy_model, eps=1e-6):
+    """Extract SINDy dynamics"""
+    variables = sindy_model.feature_names  # ["x", "y", "z", "u"]
+    coefficients = sindy_model.coefficients()
+    features = sindy_model.get_feature_names()  
+        # ["1", "x", "y", "z", "u", "x * y", "x * z", "x * u", "y * z", ...]
+    features = [f.replace("^", "**") for f in features]
+    features = [f.replace(" ", " * ") for f in features]
+    def eval_features(features, variables_dict):
+        return [eval(f, variables_dict) for f in features]
+    def eval_rhs(coefficients, features, variables_dict):
+        return coefficients @ eval_features(features, variables_dict)
+    def sindy_dynamics(t, x_, u_, params={}):
+        states_inputs = x_.tolist() + np.atleast_1d(u_).tolist()
+        variables_dict = dict(zip(variables, states_inputs))
+        return eval_rhs(coefficients, features, variables_dict)
+    return sindy_dynamics
 
 #%% [markdown]
 # The SINDy model `sindy_model` has the `simulate()` method that can be used to predict the evolution of the system.
 # First, let's predict the trajectory on the test data:
 
 #%%
-x_SINDy_pred = sindy_model.simulate(x_test[:,0], t_test)
+if test_SINDYc:
+    x_SINDy_pred = sindy_model.simulate(x_test[:,0], t_test, u=u_test)
 
 #%% [markdown]
 # Plot the simulated and predicted trajectory with the test data:
 
 #%%
-fig, ax = plt.subplots(3, 1, sharex=True)
-ax[0].plot(t_test, x_test[0], label='x_test')
-ax[0].plot(t_test, x_SINDy_pred[:, 0], label='x_SINDy_pred')
-ax[0].set_ylabel('x')
-ax[0].legend()
-ax[1].plot(t_test, x_test[1], label='y_test')
-ax[1].plot(t_test, x_SINDy_pred[:, 1], label='y_SINDy_pred')
-ax[1].set_ylabel('y')
-ax[1].legend()
-ax[2].plot(t_test, x_test[2], label='z_test')
-ax[2].plot(t_test, x_SINDy_pred[:, 2], label='z_SINDy_pred')
-ax[2].set_ylabel('z')
-ax[2].set_xlabel('Time')
-ax[2].legend()
-plt.draw()
+if test_SINDYc:
+    fig, ax = plt.subplots(3, 1, sharex=True)
+    ax[0].plot(t_test, x_test[0], label='x_test')
+    ax[0].plot(t_test[:-1], x_SINDy_pred[:, 0], label='x_SINDy_pred')
+    ax[0].set_ylabel('x')
+    ax[0].legend()
+    ax[1].plot(t_test, x_test[1], label='y_test')
+    ax[1].plot(t_test[:-1], x_SINDy_pred[:, 1], label='y_SINDy_pred')
+    ax[1].set_ylabel('y')
+    ax[1].legend()
+    ax[2].plot(t_test, x_test[2], label='z_test')
+    ax[2].plot(t_test[:-1], x_SINDy_pred[:, 2], label='z_SINDy_pred')
+    ax[2].set_ylabel('z')
+    ax[2].set_xlabel('Time')
+    ax[2].legend()
+    plt.draw()
 
 #%% [markdown]
 # So the SINDy model is not perfect, but it is much better than the DMDc model.
@@ -503,8 +532,16 @@ plt.draw()
 # The optimal control approach requires we create a `control.NonlinearIOSystem` object from the SINDy model.
 
 #%%
-print(sindy_model.coefficients())
-print(sindy_model.get_feature_names())
+# def sindy_dynamics(t, x_, u, params={}):
+#     """SINDy dynamics"""
+#     return sindy_model.predict(x_[np.newaxis, :], u)
+sindy_dynamics = extract_sindy_dynamics(sindy_model)
+print(sindy_dynamics(0, x_test[:, 0], u_test[0]))
+# exit(0)
+sys_SINDy = control.NonlinearIOSystem(
+    sindy_dynamics, None, inputs=["u"], states=["x", "y", "z"],
+    name="sys_SINDy"
+)
 
 #%% [markdown]
 # Define the SINDy predictor function:
@@ -520,6 +557,37 @@ def SINDy_predictor(xd, t_horizon, sys=None):
         sys, xd[:, 0], t_horizon, cost=cost, terminal_cost=terminal_cost
     )
     return x, u
+
+#%% [markdown]
+# Now we can test the SINDy model in the MPC simulation.
+# We expect the results to be about as good as the exact model.
+
+#%%
+T_horizon = dt_data * 50
+T_update = dt_data * 20
+n_horizon = int(np.floor(T_horizon/dt_data)) + 1
+n_update = int(np.floor(T_update/dt_data)) + 1
+n_updates = 3
+xeq = np.array([-np.sqrt(72), -np.sqrt(72), 27])
+print(f"xeq: {xeq}")
+command = np.outer(xeq, np.ones(n_update * n_updates + 1))
+command[:, 0] = np.array([0, 0, 0])  # Initial state
+if control_SINDYc:
+    mpc_SINDYc = MPCSimulation(
+        sys=lorenz_forced_sys,
+        inplist=['u'],
+        outlist=['lorenz_forced_sys.x', 'lorenz_forced_sys.y', 'lorenz_forced_sys.z'],
+        predictor=lambda x0, t_horizon: SINDy_predictor(x0, t_horizon, sys=sys_SINDy),
+        T_horizon=T_horizon, 
+        T_update=T_update,
+        n_updates=n_updates,
+        n_horizon=n_horizon, 
+        n_update=n_update, 
+        xd=command
+    )
+    results_mpc_SINDYc = mpc_SINDYc.simulate()
+    mpc_SINDYc.plot_results()
+    plt.draw()
 
 #%%
 plt.show()
