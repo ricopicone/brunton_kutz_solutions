@@ -16,9 +16,9 @@ import pysindy
 # Set up some flags for running the MPC simulations and test predictions:
 
 #%%
-control_lorenz = False
+control_lorenz = True
 control_DMDc = False
-control_SINDYc = True
+control_SINDYc = False
 control_NN = False
 
 test_DMDc = False
@@ -476,7 +476,7 @@ sindy_model.fit(x_train.T, t=dt_data, u=u_train, multiple_trajectories=False)
 print("Dynamics identified by pySINDy:")
 sindy_model.print()
 
-def extract_sindy_dynamics(sindy_model, eps=1e-6):
+def extract_sindy_dynamics(sindy_model):
     """Extract SINDy dynamics"""
     variables = sindy_model.feature_names  # ["x", "y", "z", "u"]
     coefficients = sindy_model.coefficients()
