@@ -22,7 +22,7 @@ control_SINDYc = True
 control_NN = False
 
 test_DMDc = False
-test_SINDYc = False
+test_SINDYc = True
 test_NN = False
 
 #%% [markdown]
@@ -476,7 +476,7 @@ sindy_model.fit(x_train.T, t=dt_data, u=u_train, multiple_trajectories=False)
 print("Dynamics identified by pySINDy:")
 sindy_model.print()
 
-def extract_sindy_dynamics(sindy_model, eps=1e-6):
+def extract_sindy_dynamics(sindy_model, eps=1e-12):
     """Extract SINDy dynamics"""
     variables = sindy_model.feature_names  # ["x", "y", "z", "u"]
     coefficients = sindy_model.coefficients()
@@ -489,7 +489,7 @@ def extract_sindy_dynamics(sindy_model, eps=1e-6):
         for row in range(coefficients.shape[0]):
             rhs_row = ""
             for col in range(coefficients.shape[1]):
-                if coefficients[row, col] > eps:
+                if np.abs(coefficients[row, col]) > eps:
                     if rhs_row:
                         rhs_row += " + "
                     rhs_row += f"{coefficients[row, col]} * {features[col]}"
@@ -509,7 +509,14 @@ def extract_sindy_dynamics(sindy_model, eps=1e-6):
 
 #%%
 if test_SINDYc:
-    x_SINDy_pred = sindy_model.simulate(x_test[:,0], t_test, u=u_test)
+    sindy_dynamics = extract_sindy_dynamics(sindy_model)
+    sindy_sys = control.NonlinearIOSystem(
+        sindy_dynamics, None, inputs=["u"], states=["x", "y", "z"],
+        name="sindy_sys"
+    )
+    x_SINDy_pred = control.input_output_response(
+        sindy_sys, T=t_test, U=u_test, X0=x_test[:, 0]
+    ).states
 
 #%% [markdown]
 # Plot the simulated and predicted trajectory with the test data:
@@ -518,15 +525,15 @@ if test_SINDYc:
 if test_SINDYc:
     fig, ax = plt.subplots(3, 1, sharex=True)
     ax[0].plot(t_test, x_test[0], label='x_test')
-    ax[0].plot(t_test[:-1], x_SINDy_pred[:, 0], label='x_SINDy_pred')
+    ax[0].plot(t_test, x_SINDy_pred[0, :], label='x_SINDy_pred')
     ax[0].set_ylabel('x')
     ax[0].legend()
     ax[1].plot(t_test, x_test[1], label='y_test')
-    ax[1].plot(t_test[:-1], x_SINDy_pred[:, 1], label='y_SINDy_pred')
+    ax[1].plot(t_test, x_SINDy_pred[1, :], label='y_SINDy_pred')
     ax[1].set_ylabel('y')
     ax[1].legend()
     ax[2].plot(t_test, x_test[2], label='z_test')
-    ax[2].plot(t_test[:-1], x_SINDy_pred[:, 2], label='z_SINDy_pred')
+    ax[2].plot(t_test, x_SINDy_pred[2, :], label='z_SINDy_pred')
     ax[2].set_ylabel('z')
     ax[2].set_xlabel('Time')
     ax[2].legend()
