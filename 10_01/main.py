@@ -16,9 +16,9 @@ import pysindy
 # Set up some flags for running the MPC simulations and test predictions:
 
 #%%
-control_lorenz = True
+control_lorenz = False
 control_DMDc = False
-control_SINDYc = False
+control_SINDYc = True
 control_NN = False
 
 test_DMDc = False
@@ -476,7 +476,7 @@ sindy_model.fit(x_train.T, t=dt_data, u=u_train, multiple_trajectories=False)
 print("Dynamics identified by pySINDy:")
 sindy_model.print()
 
-def extract_sindy_dynamics(sindy_model):
+def extract_sindy_dynamics(sindy_model, eps=1e-6):
     """Extract SINDy dynamics"""
     variables = sindy_model.feature_names  # ["x", "y", "z", "u"]
     coefficients = sindy_model.coefficients()
@@ -484,14 +484,23 @@ def extract_sindy_dynamics(sindy_model):
         # ["1", "x", "y", "z", "u", "x * y", "x * z", "x * u", "y * z", ...]
     features = [f.replace("^", "**") for f in features]
     features = [f.replace(" ", " * ") for f in features]
-    def eval_features(features, variables_dict):
-        return [eval(f, variables_dict) for f in features]
-    def eval_rhs(coefficients, features, variables_dict):
-        return coefficients @ eval_features(features, variables_dict)
+    def rhs(coefficients, features):
+        rhs = []
+        for row in range(coefficients.shape[0]):
+            rhs_row = ""
+            for col in range(coefficients.shape[1]):
+                if coefficients[row, col] > eps:
+                    if rhs_row:
+                        rhs_row += " + "
+                    rhs_row += f"{coefficients[row, col]} * {features[col]}"
+            rhs.append(rhs_row)
+        return rhs
+    rhs_str = rhs(coefficients, features)  # Eager evaluation
+    n_equations = len(rhs_str)
     def sindy_dynamics(t, x_, u_, params={}):
         states_inputs = x_.tolist() + np.atleast_1d(u_).tolist()
         variables_dict = dict(zip(variables, states_inputs))
-        return eval_rhs(coefficients, features, variables_dict)
+        return [eval(rhs_str[i], variables_dict) for i in range(n_equations)]
     return sindy_dynamics
 
 #%% [markdown]
