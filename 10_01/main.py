@@ -6,11 +6,17 @@
 #%%
 import numpy as np
 import matplotlib.pyplot as plt
+import pickle
 import time
 import control
 import control.optimal as opt
 import pydmd
 import pysindy
+import keras
+from keras.models import Sequential
+from keras.layers import Dense, Input, Activation
+from keras import optimizers
+import tensorflow as tf
 
 #%% [markdown]
 # Set up some flags for running the MPC simulations and test predictions:
@@ -18,12 +24,14 @@ import pysindy
 #%%
 control_lorenz = False
 control_DMDc = False
-control_SINDYc = True
-control_NN = False
+control_SINDYc = False
+control_NN = True
 
-test_DMDc = False
+retrain = True  # Retrain the NN model
+
+test_DMDc = True
 test_SINDYc = True
-test_NN = False
+test_NN = True
 
 #%% [markdown]
 # ## Model Predictive Control
@@ -134,8 +142,9 @@ class MPCSimulation:
             self.results["simulation"]["states"][:, j:j+self.n_update+1] = sim.outputs
             self.results["simulation"]["inputs"][:, j:j+self.n_update+1] = sim.inputs
     
-    def plot_results(self):
+    def plot_results(self, title="MPC Simulation"):
         fig, ax = plt.subplots(2, 1, sharex=True)
+        fig.suptitle(title)
         # Plot desired states:
         if self.xd is not None:
             for i in range(self.sys.nstates):
@@ -193,6 +202,18 @@ class MPCSimulation:
         ax[1].legend()
         plt.draw()
         return fig, ax
+    
+    def save(self, filename):
+        """Save an MPC simulation object to a pickle file"""
+        with open(filename, 'wb') as f:
+            pickle.dump(self, f)
+    
+    @classmethod
+    def load(self, filename):
+        """Load an MPC simulation object from a pickle file"""
+        with open(filename, 'rb') as f:
+            return pickle.load(f)
+            
 
 #%% [markdown]
 # The `predictor()` function is quite general here.
@@ -291,12 +312,16 @@ xeq = np.array([-np.sqrt(72), -np.sqrt(72), 27])
 print(f"xeq: {xeq}")
 command = np.outer(xeq, np.ones(n_update * n_updates + 1))
 command[:, 0] = np.array([0, 0, 0])  # Initial state
-if control_lorenz:
+def _lorenz_predictor(xd, t_horizon):
+    return lorenz_predictor(xd, t_horizon, sys=lorenz_forced_sys)
+if not control_lorenz:
+    mpc_lorenz = MPCSimulation.load("mpc_lorenz.pickle")
+else:
     mpc_lorenz = MPCSimulation(
         sys=lorenz_forced_sys,
         inplist=['u'],
         outlist=['lorenz_forced_sys.x', 'lorenz_forced_sys.y', 'lorenz_forced_sys.z'],
-        predictor=lambda x0, t_horizon: lorenz_predictor(x0, t_horizon, sys=lorenz_forced_sys),
+        predictor=_lorenz_predictor,
         T_horizon=T_horizon, 
         T_update=T_update,
         n_updates=n_updates,
@@ -305,8 +330,9 @@ if control_lorenz:
         xd=command
     )
     results_mpc_lorenz = mpc_lorenz.simulate()
-    mpc_lorenz.plot_results()
-    plt.draw()
+    mpc_lorenz.save("mpc_lorenz.pickle")
+mpc_lorenz.plot_results("MPC Simulation with Lorenz System")
+plt.draw()
 
 #%% [markdown]
 # The results are good.
@@ -443,12 +469,17 @@ xeq = np.array([-np.sqrt(72), -np.sqrt(72), 27])
 print(f"xeq: {xeq}")
 command = np.outer(xeq, np.ones(n_update * n_updates + 1))
 command[:, 0] = x_test[:, 0]  # Initial state
-if control_DMDc:
+def DMDc_predictor_(xd, t_horizon):  # Wrapper for predictor (picklable)
+    return DMDc_predictor(xd, t_horizon, sys=sys_DMDc)
+if not control_DMDc:
+    mpc_DMDc = MPCSimulation.load("mpc_DMDc.pickle")
+else:
+    sys_DMDc = control.ss(A_pydmd, B_pydmd, np.eye(A_pydmd.shape[0]), 0, dt=dt_data)
     mpc_DMDc = MPCSimulation(
         sys=lorenz_forced_sys,
         inplist=['u'],
         outlist=['lorenz_forced_sys.x', 'lorenz_forced_sys.y', 'lorenz_forced_sys.z'],
-        predictor=lambda x0, t_horizon: DMDc_predictor(x0, t_horizon, sys=sys_DMDc),
+        predictor=DMDc_predictor_,
         T_horizon=T_horizon, 
         T_update=T_update,
         n_updates=n_updates,
@@ -457,8 +488,9 @@ if control_DMDc:
         xd=command
     )
     results_mpc_DMDc = mpc_DMDc.simulate()
-    mpc_DMDc.plot_results()
-    plt.show()
+    mpc_DMDc.save("mpc_DMDc.pickle")
+mpc_DMDc.plot_results("MPC Simulation with DMDc Model")
+plt.draw()
 
 #%% [markdown]
 # As expected, the DMDc model performs poorly.
@@ -504,8 +536,7 @@ def extract_sindy_dynamics(sindy_model, eps=1e-12):
     return sindy_dynamics
 
 #%% [markdown]
-# The SINDy model `sindy_model` has the `simulate()` method that can be used to predict the evolution of the system.
-# First, let's predict the trajectory on the test data:
+# Let's predict the trajectory on the test data:
 
 #%%
 if test_SINDYc:
@@ -548,12 +579,7 @@ if test_SINDYc:
 # The optimal control approach requires we create a `control.NonlinearIOSystem` object from the SINDy model.
 
 #%%
-# def sindy_dynamics(t, x_, u, params={}):
-#     """SINDy dynamics"""
-#     return sindy_model.predict(x_[np.newaxis, :], u)
 sindy_dynamics = extract_sindy_dynamics(sindy_model)
-print(sindy_dynamics(0, x_test[:, 0], u_test[0]))
-# exit(0)
 sys_SINDy = control.NonlinearIOSystem(
     sindy_dynamics, None, inputs=["u"], states=["x", "y", "z"],
     name="sys_SINDy"
@@ -583,17 +609,21 @@ T_horizon = dt_data * 50
 T_update = dt_data * 20
 n_horizon = int(np.floor(T_horizon/dt_data)) + 1
 n_update = int(np.floor(T_update/dt_data)) + 1
-n_updates = 3
+n_updates = 50
 xeq = np.array([-np.sqrt(72), -np.sqrt(72), 27])
 print(f"xeq: {xeq}")
 command = np.outer(xeq, np.ones(n_update * n_updates + 1))
 command[:, 0] = np.array([0, 0, 0])  # Initial state
-if control_SINDYc:
+def SINDy_predictor_(xd, t_horizon):  # Wrapper for predictor (picklable)
+    return SINDy_predictor(xd, t_horizon, sys=sys_SINDy)
+if not control_SINDYc:
+    mpc_SINDYc = MPCSimulation.load("mpc_SINDYc.pickle")
+else:
     mpc_SINDYc = MPCSimulation(
         sys=lorenz_forced_sys,
         inplist=['u'],
         outlist=['lorenz_forced_sys.x', 'lorenz_forced_sys.y', 'lorenz_forced_sys.z'],
-        predictor=lambda x0, t_horizon: SINDy_predictor(x0, t_horizon, sys=sys_SINDy),
+        predictor=SINDy_predictor_,
         T_horizon=T_horizon, 
         T_update=T_update,
         n_updates=n_updates,
@@ -602,8 +632,182 @@ if control_SINDYc:
         xd=command
     )
     results_mpc_SINDYc = mpc_SINDYc.simulate()
-    mpc_SINDYc.plot_results()
+    mpc_SINDYc.save("mpc_SINDYc.pickle")
+mpc_SINDYc.plot_results("MPC Simulation with SINDy Model")
+plt.draw()
+
+#%% [markdown]
+# The results are quite good, very similar to the results with the exact model.
+# The SINDy model is a good choice for the MPC simulation.
+#
+# ## Neural Network (NN) Model
+#
+# We can train a NN model to predict the Lorenz system dynamics, as in Brunton and Kutz (2022) problem 6.1d.
+#
+# Begin by defining the neural network architecture:
+
+#%%
+def build_model():
+    """Build the feedforward neural network model"""
+    model = Sequential()
+    model.add(Input(shape=(4,)))  # 3 states + 1 input
+    model.add(Dense(5))
+    model.add(Activation('relu'))
+    model.add(Dense(3))  # 3 states
+    return model
+
+#%% [markdown]
+# Compile the model:
+
+#%%
+model = build_model()
+model.compile(
+    optimizer=optimizers.Adam(learning_rate=0.001),
+    loss='mean_squared_error',  # Loss function
+    metrics=['mean_absolute_error'],  # Metrics to monitor
+)
+
+#%% [markdown]
+# Train the model:
+
+#%% tags=["remove_output"]
+X = np.hstack([x_train[:, :-1].T, u_train[:-1].reshape(-1, 1)])
+Y = x_train[:, 1:].T
+if retrain:
+    history = model.fit(
+        X,  # Input data
+        Y,  # Target data
+        epochs=30,  # Number of epochs
+        batch_size=5,  # Batch size
+        validation_split=0.2,  # Validation split
+        shuffle=True,  # Shuffle the data
+    )
+    model.save('model.keras')
+    history = True
+else:
+    model = keras.models.load_model('model.keras')
+    history = False
+
+#%% [markdown]
+# Plot the training and validation loss versus the epoch:
+
+#%%
+if history:
+    fig, ax = plt.subplots()
+    ax.set_yscale('log')
+    ax.plot(model.history.history['loss'], label='Training loss')
+    ax.plot(model.history.history['val_loss'], label='Validation loss')
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('Loss')
+    ax.legend()
     plt.draw()
+
+#%% [markdown]
+# Now we can test the NN model on the test data:
+
+#%%
+if test_NN:
+    X_test = np.hstack([x_test.T, u_test.reshape(-1, 1)])
+    Y_test = x_test.T
+    Y_NN_pred = model.predict(X_test).T
+
+#%% [markdown]
+# Plot the predicted trajectory with the test data:
+
+#%%
+if test_NN:
+    fig, ax = plt.subplots(3, 1, sharex=True)
+    ax[0].plot(t_test, x_test[0], label='x_test')
+    ax[0].plot(t_test, Y_NN_pred[0], label='x_NN_pred')
+    ax[0].set_ylabel('x')
+    ax[0].legend()
+    ax[1].plot(t_test, x_test[1], label='y_test')
+    ax[1].plot(t_test, Y_NN_pred[1], label='y_NN_pred')
+    ax[1].set_ylabel('y')
+    ax[1].legend()
+    ax[2].plot(t_test, x_test[2], label='z_test')
+    ax[2].plot(t_test, Y_NN_pred[2], label='z_NN_pred')
+    ax[2].set_ylabel('z')
+    ax[2].set_xlabel('Time')
+    ax[2].legend()
+    plt.draw()
+
+#%% [markdown]
+# The results are quite good.
+# There is some deviation, but it doesn't occur until later in the simulation.
+# In fact, surprisingly, the NN model is better than the SINDYc model (however, note that the SINDYc model also yields the dynamics, whereas the NN yields only predictions).
+
+# Before we can write a predictor function, we need to create a `control` system object from the NN model.
+
+#%%
+@tf.function  # Decorator for TensorFlow function
+def NN_predict(X):
+    """Predict using the NN model (faster than model.predict)"""
+    return model(X)
+def NN_dynamics(t, x_, u_, params={}):
+    """NN dynamics"""
+    X = np.hstack([x_, u_])[np.newaxis, :]
+    return NN_predict(X).numpy().flatten()
+sys_NN = control.NonlinearIOSystem(
+    NN_dynamics, None, inputs=["u"], states=["x", "y", "z"], 
+    dt=dt_data, name="sys_NN"
+)
+
+t = t_test
+y_NN = control.input_output_response(sys_NN, T=t, U=u_test, X0=x_test[:, 0]).outputs
+fig, ax = plt.subplots(3, 1, sharex=True)
+ax[0].plot(t, y_NN[0], label='x')
+ax[0].set_ylabel('x')
+ax[0].legend()
+ax[1].plot(t, y_NN[1], label='y')
+ax[1].set_ylabel('y')
+ax[1].legend()
+ax[2].plot(t, y_NN[2], label='z')
+ax[2].set_ylabel('z')
+ax[2].set_xlabel('Time')
+ax[2].legend()
+plt.show()
+
+#%% [markdown]
+# Now create a predictor function for the NN model:
+
+#%%
+def NN_predictor(xd, t_horizon, sys):
+    """Predictor for NN model using optimal control"""
+    Q = np.eye(sys.nstates)
+    R = 0.01 * np.eye(sys.ninputs)
+    cost = control.optimal.quadratic_cost(sys, Q, R, x0=xd[:, -1])
+    terminal_cost = control.optimal.quadratic_cost(sys, 5*Q, 0*R, x0=xd[:, -1])
+    x, u = predict_trajectory(
+        sys, xd[:, 0], t_horizon, cost=cost, terminal_cost=terminal_cost
+    )
+    return x, u
+
+#%% [markdown]
+# Now we can test the NN model in the MPC simulation.
+
+#%%
+def NN_predictor_(xd, t_horizon):  # Wrapper for predictor (picklable)
+    return NN_predictor(xd, t_horizon, sys=sys_NN)
+if not control_NN:
+    mpc_NN = MPCSimulation.load("mpc_NN.pickle")
+else:
+    mpc_NN = MPCSimulation(
+        sys=lorenz_forced_sys,
+        inplist=['u'],
+        outlist=['lorenz_forced_sys.x', 'lorenz_forced_sys.y', 'lorenz_forced_sys.z'],
+        predictor=NN_predictor_,
+        T_horizon=T_horizon, 
+        T_update=T_update,
+        n_updates=n_updates,
+        n_horizon=n_horizon, 
+        n_update=n_update, 
+        xd=command
+    )
+    results_mpc_NN = mpc_NN.simulate()
+    mpc_NN.save("mpc_NN.pickle")
+mpc_NN.plot_results("MPC Simulation with NN Model")
+plt.draw()
 
 #%%
 plt.show()
