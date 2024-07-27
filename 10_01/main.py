@@ -24,10 +24,10 @@ import tensorflow as tf
 #%%
 control_lorenz = False
 control_DMDc = False
-control_SINDYc = False
-control_NN = True
+control_SINDYc = True
+control_NN = False
 
-retrain = True  # Retrain the NN model
+retrain = False  # Retrain the NN model
 
 test_DMDc = True
 test_SINDYc = True
@@ -254,47 +254,34 @@ lorenz_forced_sys = control.NonlinearIOSystem(
 # For all three models (and the exact model used here), this will involve predicting the future states given the desired state trajectory.
 # The challenge is that we don't know the future inputs.
 # There are multiple ways to approach this.
-# The first is to assume that the future inputs are the same as the current input.
-# This works for short update periods relative to the dynamics of the system.
-# The second approach is to solve an optimal control problem to determine the future inputs.
-# This will give better results but is more computationally expensive.
-# We will write a function that can handle both cases.
+# The approach we use is to numerically solve an optimal control problem to determine the optimal future inputs.
+# The following function does this:
 
 #%%
-def predict_trajectory(sys, x0, t_horizon, u0=None, cost=None, terminal_cost=None):
-    if cost is None:  # Constant input
-        if u0 is None:
-            u0 = np.zeros_like(t_horizon)  # Zero input
-        u = u0 * np.ones_like(t_horizon)  # Constant input
-        x = control.input_output_response(
-            sys, T=t_horizon, U=u, x0=x0
-        ).states
-    else:  # Solve optimal control problem
-        ocp = opt.OptimalControlProblem(
-            sys, t_horizon, cost, terminal_cost=terminal_cost
-        )
-        res = ocp.compute_trajectory(x0, print_summary=False)
-        u = res.inputs
-        x = res.states
-    return x, u
-
-#%% [markdown]
-# This isn't specific enough to be used as a predictor function, but it can be used to write a predictor function.
-# We will write a predictor function that uses the Lorenz system model to predict future states.
-# We will use the optimal control approach to determine the future inputs.
-
-#%%
-def lorenz_predictor(xd, t_horizon, sys):
-    """Predictor for Lorenz system using optimal control"""
+def predict_trajectory(xd, t_horizon, sys):
+    """Predict trajectory using optimal control"""
     Q = np.eye(sys.nstates)
     R = 0.01 * np.eye(sys.ninputs)
     cost = control.optimal.quadratic_cost(sys, Q, R, x0=xd[:, -1])
     terminal_cost = control.optimal.quadratic_cost(
         sys, 5*Q, 0*R, x0=xd[:, -1]
     )  # Penalize terminal state more
-    x, u = predict_trajectory(
-        sys, xd[:, 0], t_horizon, cost=cost, terminal_cost=terminal_cost
+    ocp = opt.OptimalControlProblem(
+        sys, t_horizon, cost, terminal_cost=terminal_cost
     )
+    res = ocp.compute_trajectory(xd[:, 0], print_summary=False)
+    u = res.inputs
+    x = res.states
+    return x, u
+
+#%% [markdown]
+# This isn't quite specific enough to be used as a predictor function, but it can be used to write a predictor function for each case.
+# Here is one for the Lorenz system:
+
+#%%
+def lorenz_predictor(xd, t_horizon):
+    """Predictor for Lorenz system using optimal control"""
+    x, u = predict_trajectory(xd, t_horizon, lorenz_forced_sys)
     return x, u
 
 #%% [markdown]
@@ -312,8 +299,6 @@ xeq = np.array([-np.sqrt(72), -np.sqrt(72), 27])
 print(f"xeq: {xeq}")
 command = np.outer(xeq, np.ones(n_update * n_updates + 1))
 command[:, 0] = np.array([0, 0, 0])  # Initial state
-def _lorenz_predictor(xd, t_horizon):
-    return lorenz_predictor(xd, t_horizon, sys=lorenz_forced_sys)
 if not control_lorenz:
     mpc_lorenz = MPCSimulation.load("mpc_lorenz.pickle")
 else:
@@ -321,7 +306,7 @@ else:
         sys=lorenz_forced_sys,
         inplist=['u'],
         outlist=['lorenz_forced_sys.x', 'lorenz_forced_sys.y', 'lorenz_forced_sys.z'],
-        predictor=_lorenz_predictor,
+        predictor=lorenz_predictor,
         T_horizon=T_horizon, 
         T_update=T_update,
         n_updates=n_updates,
@@ -443,15 +428,9 @@ if test_DMDc:
 # Nonetheless, define the DMDc predictor function:
 
 #%%
-def DMDc_predictor(xd, t_horizon, sys=None):
+def DMDc_predictor(xd, t_horizon):
     """Predictor for DMDc model using optimal control"""
-    Q = np.eye(sys.nstates)
-    R = 0.01 * np.eye(sys.ninputs)
-    cost = control.optimal.quadratic_cost(sys, Q, R, x0=xd[:, -1])
-    terminal_cost = control.optimal.quadratic_cost(sys, 5*Q, 0*R, x0=xd[:, -1])
-    x, u = predict_trajectory(
-        sys, xd[:, 0], t_horizon, cost=cost, terminal_cost=terminal_cost
-    )
+    x, u = predict_trajectory(xd, t_horizon, sys_DMDc)
     return x, u
 
 #%% [markdown]
@@ -469,8 +448,6 @@ xeq = np.array([-np.sqrt(72), -np.sqrt(72), 27])
 print(f"xeq: {xeq}")
 command = np.outer(xeq, np.ones(n_update * n_updates + 1))
 command[:, 0] = x_test[:, 0]  # Initial state
-def DMDc_predictor_(xd, t_horizon):  # Wrapper for predictor (picklable)
-    return DMDc_predictor(xd, t_horizon, sys=sys_DMDc)
 if not control_DMDc:
     mpc_DMDc = MPCSimulation.load("mpc_DMDc.pickle")
 else:
@@ -479,7 +456,7 @@ else:
         sys=lorenz_forced_sys,
         inplist=['u'],
         outlist=['lorenz_forced_sys.x', 'lorenz_forced_sys.y', 'lorenz_forced_sys.z'],
-        predictor=DMDc_predictor_,
+        predictor=DMDc_predictor,
         T_horizon=T_horizon, 
         T_update=T_update,
         n_updates=n_updates,
@@ -589,15 +566,9 @@ sys_SINDy = control.NonlinearIOSystem(
 # Define the SINDy predictor function:
 
 #%%
-def SINDy_predictor(xd, t_horizon, sys=None):
+def SINDy_predictor(xd, t_horizon):
     """Predictor for SINDy model using optimal control"""
-    Q = np.eye(sys.nstates)
-    R = 0.01 * np.eye(sys.ninputs)
-    cost = control.optimal.quadratic_cost(sys, Q, R, x0=xd[:, -1])
-    terminal_cost = control.optimal.quadratic_cost(sys, 5*Q, 0*R, x0=xd[:, -1])
-    x, u = predict_trajectory(
-        sys, xd[:, 0], t_horizon, cost=cost, terminal_cost=terminal_cost
-    )
+    x, u = predict_trajectory(xd, t_horizon, sys_SINDy)
     return x, u
 
 #%% [markdown]
@@ -605,17 +576,6 @@ def SINDy_predictor(xd, t_horizon, sys=None):
 # We expect the results to be about as good as the exact model.
 
 #%%
-T_horizon = dt_data * 50
-T_update = dt_data * 20
-n_horizon = int(np.floor(T_horizon/dt_data)) + 1
-n_update = int(np.floor(T_update/dt_data)) + 1
-n_updates = 50
-xeq = np.array([-np.sqrt(72), -np.sqrt(72), 27])
-print(f"xeq: {xeq}")
-command = np.outer(xeq, np.ones(n_update * n_updates + 1))
-command[:, 0] = np.array([0, 0, 0])  # Initial state
-def SINDy_predictor_(xd, t_horizon):  # Wrapper for predictor (picklable)
-    return SINDy_predictor(xd, t_horizon, sys=sys_SINDy)
 if not control_SINDYc:
     mpc_SINDYc = MPCSimulation.load("mpc_SINDYc.pickle")
 else:
@@ -623,7 +583,7 @@ else:
         sys=lorenz_forced_sys,
         inplist=['u'],
         outlist=['lorenz_forced_sys.x', 'lorenz_forced_sys.y', 'lorenz_forced_sys.z'],
-        predictor=SINDy_predictor_,
+        predictor=SINDy_predictor,
         T_horizon=T_horizon, 
         T_update=T_update,
         n_updates=n_updates,
@@ -741,13 +701,13 @@ if test_NN:
 
 #%%
 @tf.function  # Decorator for TensorFlow function
-def NN_predict(X):
-    """Predict using the NN model (faster than model.predict)"""
+def NN_dynamics_tf(X):
+    """Dynamics for NN model as a TensorFlow function (fast)"""
     return model(X)
 def NN_dynamics(t, x_, u_, params={}):
     """NN dynamics"""
     X = np.hstack([x_, u_])[np.newaxis, :]
-    return NN_predict(X).numpy().flatten()
+    return NN_dynamics_tf(X).numpy().flatten()
 sys_NN = control.NonlinearIOSystem(
     NN_dynamics, None, inputs=["u"], states=["x", "y", "z"], 
     dt=dt_data, name="sys_NN"
@@ -766,29 +726,22 @@ ax[2].plot(t, y_NN[2], label='z')
 ax[2].set_ylabel('z')
 ax[2].set_xlabel('Time')
 ax[2].legend()
-plt.show()
+fig.suptitle('NN Model prediction on test data (not quite working like model.predict)')
+plt.draw()
 
 #%% [markdown]
 # Now create a predictor function for the NN model:
 
 #%%
-def NN_predictor(xd, t_horizon, sys):
+def NN_predictor(xd, t_horizon):
     """Predictor for NN model using optimal control"""
-    Q = np.eye(sys.nstates)
-    R = 0.01 * np.eye(sys.ninputs)
-    cost = control.optimal.quadratic_cost(sys, Q, R, x0=xd[:, -1])
-    terminal_cost = control.optimal.quadratic_cost(sys, 5*Q, 0*R, x0=xd[:, -1])
-    x, u = predict_trajectory(
-        sys, xd[:, 0], t_horizon, cost=cost, terminal_cost=terminal_cost
-    )
+    x, u = predict_trajectory(xd, t_horizon, sys_NN)
     return x, u
 
 #%% [markdown]
 # Now we can test the NN model in the MPC simulation.
 
 #%%
-def NN_predictor_(xd, t_horizon):  # Wrapper for predictor (picklable)
-    return NN_predictor(xd, t_horizon, sys=sys_NN)
 if not control_NN:
     mpc_NN = MPCSimulation.load("mpc_NN.pickle")
 else:
@@ -796,7 +749,7 @@ else:
         sys=lorenz_forced_sys,
         inplist=['u'],
         outlist=['lorenz_forced_sys.x', 'lorenz_forced_sys.y', 'lorenz_forced_sys.z'],
-        predictor=NN_predictor_,
+        predictor=NN_predictor,
         T_horizon=T_horizon, 
         T_update=T_update,
         n_updates=n_updates,
