@@ -24,7 +24,7 @@ import tensorflow as tf
 #%%
 control_lorenz = False
 control_DMDc = False
-control_SINDYc = True
+control_SINDYc = False
 control_NN = False
 
 retrain = False  # Retrain the NN model
@@ -663,41 +663,9 @@ if history:
     plt.draw()
 
 #%% [markdown]
-# Now we can test the NN model on the test data:
-
-#%%
-if test_NN:
-    X_test = np.hstack([x_test.T, u_test.reshape(-1, 1)])
-    Y_test = x_test.T
-    Y_NN_pred = model.predict(X_test).T
-
-#%% [markdown]
-# Plot the predicted trajectory with the test data:
-
-#%%
-if test_NN:
-    fig, ax = plt.subplots(3, 1, sharex=True)
-    ax[0].plot(t_test, x_test[0], label='x_test')
-    ax[0].plot(t_test, Y_NN_pred[0], label='x_NN_pred')
-    ax[0].set_ylabel('x')
-    ax[0].legend()
-    ax[1].plot(t_test, x_test[1], label='y_test')
-    ax[1].plot(t_test, Y_NN_pred[1], label='y_NN_pred')
-    ax[1].set_ylabel('y')
-    ax[1].legend()
-    ax[2].plot(t_test, x_test[2], label='z_test')
-    ax[2].plot(t_test, Y_NN_pred[2], label='z_NN_pred')
-    ax[2].set_ylabel('z')
-    ax[2].set_xlabel('Time')
-    ax[2].legend()
-    plt.draw()
-
-#%% [markdown]
-# The results are quite good.
-# There is some deviation, but it doesn't occur until later in the simulation.
-# In fact, surprisingly, the NN model is better than the SINDYc model (however, note that the SINDYc model also yields the dynamics, whereas the NN yields only predictions).
-
-# Before we can write a predictor function, we need to create a `control` system object from the NN model.
+# Now we can test the NN model on the test data.
+# To predict the trajectory, we could use the `model.predict()` method, but it is slow to predict many individual points (it's better for a batch prediction, but the next state depends on the previous state, so we can't do that).
+# So we may as well create a `control.NonlinearIOSystem` object from the NN model and use the TensorFlow function to predict the next state, which we will need anyway for the MPC simulation.
 
 #%%
 @tf.function  # Decorator for TensorFlow function
@@ -713,23 +681,35 @@ sys_NN = control.NonlinearIOSystem(
     dt=dt_data, name="sys_NN"
 )
 
-t = t_test
-y_NN = control.input_output_response(sys_NN, T=t, U=u_test, X0=x_test[:, 0]).outputs
-fig, ax = plt.subplots(3, 1, sharex=True)
-ax[0].plot(t, y_NN[0], label='x')
-ax[0].set_ylabel('x')
-ax[0].legend()
-ax[1].plot(t, y_NN[1], label='y')
-ax[1].set_ylabel('y')
-ax[1].legend()
-ax[2].plot(t, y_NN[2], label='z')
-ax[2].set_ylabel('z')
-ax[2].set_xlabel('Time')
-ax[2].legend()
-fig.suptitle('NN Model prediction on test data (not quite working like model.predict)')
-plt.draw()
+#%%
+if test_NN:
+    NN_pred = control.input_output_response(
+        sys_NN, T=t_test, U=u_test, X0=x_test[:, 0]
+    ).states
 
 #%% [markdown]
+# Plot the predicted trajectory with the test data:
+
+#%%
+if test_NN:
+    fig, ax = plt.subplots(3, 1, sharex=True)
+    ax[0].plot(t_test, x_test[0], label='x_test')
+    ax[0].plot(t_test, NN_pred[0], label='x_NN_pred')
+    ax[0].set_ylabel('x')
+    ax[0].legend()
+    ax[1].plot(t_test, x_test[1], label='y_test')
+    ax[1].plot(t_test, NN_pred[1], label='y_NN_pred')
+    ax[1].set_ylabel('y')
+    ax[1].legend()
+    ax[2].plot(t_test, x_test[2], label='z_test')
+    ax[2].plot(t_test, NN_pred[2], label='z_NN_pred')
+    ax[2].set_ylabel('z')
+    ax[2].set_xlabel('Time')
+    ax[2].legend()
+    plt.draw()
+
+#%% [markdown]
+# The results are pretty terrible.
 # Now create a predictor function for the NN model:
 
 #%%
