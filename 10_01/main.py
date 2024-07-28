@@ -31,7 +31,7 @@ retrain = False  # Retrain the NN model
 
 test_DMDc = True
 test_SINDYc = True
-test_NN = True
+test_NN = False
 
 #%% [markdown]
 # ## Model Predictive Control
@@ -613,6 +613,18 @@ def build_model():
     model.add(Input(shape=(4,)))  # 3 states + 1 input
     model.add(Dense(5))
     model.add(Activation('relu'))
+    model.add(Dense(5))
+    model.add(Activation('relu'))
+    model.add(Dense(5))
+    model.add(Activation('relu'))
+    model.add(Dense(5))
+    model.add(Activation('relu'))
+    model.add(Dense(5))
+    model.add(Activation('relu'))
+    model.add(Dense(5))
+    model.add(Activation('relu'))
+    model.add(Dense(5))
+    model.add(Activation('relu'))
     model.add(Dense(3))  # 3 states
     return model
 
@@ -622,23 +634,44 @@ def build_model():
 #%%
 model = build_model()
 model.compile(
-    optimizer=optimizers.Adam(learning_rate=0.001),
+    optimizer=optimizers.Adam(learning_rate=0.0001),
     loss='mean_squared_error',  # Loss function
-    metrics=['mean_absolute_error'],  # Metrics to monitor
+    # metrics=['mean_absolute_error'],  # Metrics to monitor
 )
+
+#%% [markdown]
+# Generate extra training data for the NN model, using a random input:
+
+#%%
+t_train_extra = np.arange(0, 5000, dt_data)  # Time array
+n_train_extra = len(t_train_extra)
+u_train_extra = 50 * np.random.randn(n_train_extra)
+X = np.hstack([30 * np.random.randn(n_train_extra, 2), 10 * np.random.randn(n_train_extra, 1) + 20, u_train_extra.reshape(-1, 1)])
+Y = np.zeros((n_train_extra, 3))
+for i in range(0, n_train_extra):
+    Y[i, :] = X[i, :3] + dt_data * np.array(lorenz_forced(t_train_extra[i], X[i, :3], u_train_extra[i:i+1]))
+# x_train_extra = control.input_output_response(
+#     lorenz_forced_sys, T=t_train_extra, U=u_train_extra
+# ).states
 
 #%% [markdown]
 # Train the model:
 
 #%% tags=["remove_output"]
-X = np.hstack([x_train[:, :-1].T, u_train[:-1].reshape(-1, 1)])
-Y = x_train[:, 1:].T
+# X = np.hstack([x_train[:, :-1].T, u_train[:-1].reshape(-1, 1)])
+# X_extra = np.hstack([x_train_extra[:, :-1].T, u_train_extra[:-1].reshape(-1, 1)])
+# # X = np.vstack([X, X_extra])
+# X = X_extra
+# Y = x_train[:, 1:].T
+# Y_extra = x_train_extra[:, 1:].T
+# # Y = np.vstack([Y, Y_extra])
+# Y = Y_extra
 if retrain:
     history = model.fit(
         X,  # Input data
         Y,  # Target data
-        epochs=30,  # Number of epochs
-        batch_size=5,  # Batch size
+        epochs=50,  # Number of epochs
+        # batch_size=1,  # Batch size
         validation_split=0.2,  # Validation split
         shuffle=True,  # Shuffle the data
     )
@@ -692,17 +725,18 @@ if test_NN:
 
 #%%
 if test_NN:
+    maxi = 500
     fig, ax = plt.subplots(3, 1, sharex=True)
-    ax[0].plot(t_test, x_test[0], label='x_test')
-    ax[0].plot(t_test, NN_pred[0], label='x_NN_pred')
+    ax[0].plot(t_test[:maxi], x_test[0, :maxi], label='x_test')
+    ax[0].plot(t_test[:maxi], NN_pred[0, :maxi], label='x_NN_pred')
     ax[0].set_ylabel('x')
     ax[0].legend()
-    ax[1].plot(t_test, x_test[1], label='y_test')
-    ax[1].plot(t_test, NN_pred[1], label='y_NN_pred')
+    ax[1].plot(t_test[:maxi], x_test[1, :maxi], label='y_test')
+    ax[1].plot(t_test[:maxi], NN_pred[1, :maxi], label='y_NN_pred')
     ax[1].set_ylabel('y')
     ax[1].legend()
-    ax[2].plot(t_test, x_test[2], label='z_test')
-    ax[2].plot(t_test, NN_pred[2], label='z_NN_pred')
+    ax[2].plot(t_test[:maxi], x_test[2, :maxi], label='z_test')
+    ax[2].plot(t_test[:maxi], NN_pred[2, :maxi], label='z_NN_pred')
     ax[2].set_ylabel('z')
     ax[2].set_xlabel('Time')
     ax[2].legend()
