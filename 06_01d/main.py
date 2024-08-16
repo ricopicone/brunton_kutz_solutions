@@ -241,3 +241,5 @@ plt.show()
 
 #%% [markdown]
 # We achieve excellent agreement between the true (numerically integrated) and predicted trajectories, even for lobe transitions. The test values of $\rho$ are 17 and 35, different than the training values of 10, 28, and 40. This demonstrates the ability of the neural network to generalize to new values of $\rho$.
+#
+# It should be noted, however, that the conclusions we have drawn from this method of testing are only valid for one-step predictions. A more rigorous test would involve predicting multiple steps ahead and comparing the results to the true trajectories.

@@ -22,16 +22,16 @@ import tensorflow as tf
 # Set up some flags for running the MPC simulations and test predictions:
 
 #%%
-control_lorenz = False
-control_DMDc = False
-control_SINDYc = False
-control_NN = False
+control_lorenz = True
+control_DMDc = True
+control_SINDYc = True
+control_NN = True
 
-retrain = False  # Retrain the NN model
+retrain = True  # Retrain the NN model
 
 test_DMDc = True
 test_SINDYc = True
-test_NN = False
+test_NN = True
 
 #%% [markdown]
 # ## Model Predictive Control

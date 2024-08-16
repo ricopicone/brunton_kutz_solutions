@@ -195,4 +195,4 @@ ax.set_ylabel('Mean Loss (MSE)')
 plt.show()
 
 #%% [markdown]
-# As we expect, the least squares model has the highest loss because it has prioritized fit over sparsity or small coefficients, which can lead to overfitting.
+# As we expect, the least squares model has the lowest loss because it has prioritized fit over sparsity or small coefficients, which can lead to overfitting.
